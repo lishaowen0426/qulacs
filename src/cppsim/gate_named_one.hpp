@@ -16,9 +16,9 @@
  * \~japanese-en 1量子ビットを対象とする回転角固定のゲートのクラス
  */
 
-static void Igate_idling(UINT, CTYPE*, ITYPE){};
-static void Igate_idling_gpu(UINT, void*, ITYPE, void*, UINT){};
-static void Igate_idling_mpi(UINT, CTYPE*, ITYPE, UINT){};
+static void Igate_idling(UINT, CTYPE*, ITYPE) {};
+static void Igate_idling_gpu(UINT, void*, ITYPE, void*, UINT) {};
+static void Igate_idling_mpi(UINT, CTYPE*, ITYPE, UINT) {};
 
 class ClsOneQubitGate : public QuantumGateBase {
 protected:
@@ -32,7 +32,7 @@ protected:
     ComplexMatrix _matrix_element;
 
 public:
-    explicit ClsOneQubitGate(){};
+    explicit ClsOneQubitGate() {};
     /**
      * \~japanese-en 量子状態を更新する
      *
@@ -153,6 +153,24 @@ public:
         this->_update_func_mpi = H_gate_mpi;
 #endif
         this->_name = "H";
+        this->_target_qubit_list.push_back(
+            TargetQubitInfo(target_qubit_index, 0));
+        this->_gate_property = FLAG_CLIFFORD;
+        this->_matrix_element = ComplexMatrix::Zero(2, 2);
+        this->_matrix_element << 1, 1, 1, -1;
+        this->_matrix_element /= sqrt(2.);
+    }
+
+    void HCustomMpiGateinit(UINT target_qubit_index) {
+        this->_update_func = H_gate;
+        this->_update_func_dm = dm_H_gate;
+#ifdef _USE_GPU
+        this->_update_func_gpu = H_gate_host;
+#endif
+#ifdef _USE_MPI
+        this->_update_func_mpi = H_gate_custom_mpi;
+#endif
+        this->_name = "H_Custom_MPI";
         this->_target_qubit_list.push_back(
             TargetQubitInfo(target_qubit_index, 0));
         this->_gate_property = FLAG_CLIFFORD;
@@ -353,8 +371,8 @@ protected:
     double _angle;
 
 public:
-    explicit ClsOneQubitRotationGate(){};
-    explicit ClsOneQubitRotationGate(double angle) : _angle(angle){};
+    explicit ClsOneQubitRotationGate() {};
+    explicit ClsOneQubitRotationGate(double angle) : _angle(angle) {};
     /**
      * \~japanese-en 量子状態を更新する
      *

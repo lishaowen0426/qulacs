@@ -59,6 +59,12 @@ ClsOneQubitGate* H(UINT qubit_index) {
     return ptr;
 }
 
+ClsOneQubitGate* H_Custom_MPI(UINT qubit_index) {
+    auto ptr = new ClsOneQubitGate();
+    ptr->HCustomMpiGateinit(qubit_index);
+    return ptr;
+}
+
 ClsOneQubitGate* S(UINT qubit_index) {
     auto ptr = new ClsOneQubitGate();
     ptr->SGateinit(qubit_index);

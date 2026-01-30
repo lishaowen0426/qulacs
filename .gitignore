@@ -224,3 +224,6 @@ py.typed
 
 # ignore auto-generated version file
 /pysrc/qulacs/_version.py
+
+
+/compressor/install

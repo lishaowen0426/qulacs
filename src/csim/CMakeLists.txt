@@ -20,6 +20,20 @@ add_library(csim_shared SHARED ${CSIM_SRC})
 add_dependencies(csim_static eigen)
 add_dependencies(csim_shared eigen)
 
+set(COMPRESSOR_PREFIX "${CMAKE_SOURCE_DIR}/compressor/install")
+set(COMPRESSOR_INCLUDE_DIR "${COMPRESSOR_PREFIX}/include")
+set(COMPRESSOR_LIB_DIR "${COMPRESSOR_PREFIX}/lib")
+file(GLOB COMPRESSOR_LIBS
+    "${COMPRESSOR_LIB_DIR}/*.a"
+    "${COMPRESSOR_LIB_DIR}/*.so"
+    "${COMPRESSOR_LIB_DIR}/*.dylib"
+)
+
+target_include_directories(csim_static PRIVATE ${COMPRESSOR_INCLUDE_DIR})
+target_include_directories(csim_shared PRIVATE ${COMPRESSOR_INCLUDE_DIR})
+target_link_libraries(csim_static PRIVATE ${COMPRESSOR_LIBS})
+target_link_libraries(csim_shared PRIVATE ${COMPRESSOR_LIBS})
+
 if (MSVC)
     set_target_properties(csim_static PROPERTIES LINKER_LANGUAGE CXX)
     set_target_properties(csim_shared PROPERTIES LINKER_LANGUAGE CXX)

@@ -315,6 +315,8 @@ void H_gate_parallel_simd(UINT target_qubit_index, CTYPE* state, ITYPE dim);
 void H_gate_parallel_sve(UINT target_qubit_index, CTYPE* state, ITYPE dim);
 DllExport void H_gate_mpi(
     UINT target_qubit_index, CTYPE* state, ITYPE dim, UINT inner_qc);
+DllExport void H_gate_custom_mpi(
+    UINT target_qubit_index, CTYPE* state, ITYPE dim, UINT inner_qc);
 void _H_gate_mpi(CTYPE* t, CTYPE* si, ITYPE dim, int flag);
 
 /** Hadamard gate multiplied sqrt(2) **/

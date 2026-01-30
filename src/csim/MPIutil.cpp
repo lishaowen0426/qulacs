@@ -2,6 +2,12 @@
 #ifdef _USE_MPI
 #include "MPIutil.hpp"
 
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+#include "SZ3c/sz3c.h"
 #include "utility.hpp"
 
 void MPIutil::MPIFunctionError(
@@ -124,6 +130,53 @@ void MPIutil::m_DC_sendrecv(
         mpicomm, &mpistat);
     if (ret != MPI_SUCCESS)
         MPIFunctionError("MPI_Sendrecv", ret, __FILE__, __LINE__);
+}
+
+void MPIutil::m_DC_sendrecv_compressed(void *sendbuf, void *recvbuf, int count,
+    int pair_rank, int errBoundMode, double absErrBound, double relBoundRatio,
+    double pwrBoundRatio) {
+    auto *send_complex = static_cast<CTYPE *>(sendbuf);
+    for (int i = 0; i < count; ++i) {
+        std::printf("rank=%d sendbuf[%d]=(%0.17g,%0.17g)\n", mpirank, i,
+            send_complex[i].real(), send_complex[i].imag());
+    }
+
+    int tag0 = get_tag();
+    int mpi_tag1 = tag0 + ((mpirank & pair_rank) << 1) + (mpirank > pair_rank);
+    int mpi_tag2 = mpi_tag1 ^ 1;
+
+    const size_t elem_count = static_cast<size_t>(count) * 2;
+    size_t out_size = 0;
+    unsigned char *compressed =
+        SZ_compress_args(SZ_DOUBLE, sendbuf, &out_size, errBoundMode,
+            absErrBound, relBoundRatio, pwrBoundRatio, 1, 1, 1, 1, elem_count);
+
+    uint64_t send_size = static_cast<uint64_t>(out_size);
+    uint64_t recv_size = 0;
+    UINT ret = MPI_Sendrecv(&send_size, 1, MPI_UINT64_T, pair_rank, mpi_tag1,
+        &recv_size, 1, MPI_UINT64_T, pair_rank, mpi_tag2, mpicomm, &mpistat);
+    if (ret != MPI_SUCCESS)
+        MPIFunctionError("MPI_Sendrecv(size)", ret, __FILE__, __LINE__);
+
+    std::vector<unsigned char> recv_bytes(recv_size);
+    ret = MPI_Sendrecv(compressed, static_cast<int>(send_size), MPI_BYTE,
+        pair_rank, mpi_tag1, recv_bytes.data(), static_cast<int>(recv_size),
+        MPI_BYTE, pair_rank, mpi_tag2, mpicomm, &mpistat);
+    if (ret != MPI_SUCCESS)
+        MPIFunctionError("MPI_Sendrecv(bytes)", ret, __FILE__, __LINE__);
+
+    void *decompressed = SZ_decompress(SZ_DOUBLE, recv_bytes.data(),
+        static_cast<size_t>(recv_size), 1, 1, 1, 1, elem_count);
+    auto *decompressed_d = static_cast<double *>(decompressed);
+    for (int i = 0; i < count; ++i) {
+        std::printf("rank=%d decompressed[%d]=(%0.17g,%0.17g)\n", mpirank, i,
+            decompressed_d[static_cast<size_t>(i) * 2],
+            decompressed_d[static_cast<size_t>(i) * 2 + 1]);
+    }
+    std::memcpy(recvbuf, decompressed, elem_count * sizeof(double));
+
+    free_buf(decompressed);
+    free_buf(compressed);
 }
 
 void MPIutil::m_DC_sendrecv_replace(void *buf, int count, int pair_rank) {

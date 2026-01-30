@@ -1,0 +1,3 @@
+[submodule "compressor/SZ3"]
+	path = compressor/SZ3
+	url = git@github.com:lishaowen0426/SZ3.git

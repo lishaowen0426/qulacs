@@ -100,6 +100,8 @@ DllExport ClsOneQubitGate* Z(UINT qubit_index);
  */
 DllExport ClsOneQubitGate* H(UINT qubit_index);
 
+DllExport ClsOneQubitGate* H_Custom_MPI(UINT qubit_index);
+
 /**
  * \~japanese-en \f$S\f$ゲートを作成する。
  *

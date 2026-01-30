@@ -1,5 +1,8 @@
 
+#include <cstdio>
+
 #include "MPIutil.hpp"
+#include "SZ3c/sz3c.h"
 #include "update_ops.hpp"
 #include "utility.hpp"
 
@@ -228,6 +231,39 @@ void H_gate_mpi(
         CTYPE *si = state;
         for (UINT i = 0; i < (UINT)num_work; ++i) {
             m.m_DC_sendrecv(si, t, dim_work, pair_rank);
+
+            _H_gate_mpi(t, si, dim_work, rank & pair_rank_bit);
+
+            si += dim_work;
+        }
+#ifdef _OPENMP
+        OMPutil::get_inst().reset_qulacs_num_threads();
+#endif
+    }
+}
+
+void H_gate_custom_mpi(
+    UINT target_qubit_index, CTYPE *state, ITYPE dim, UINT inner_qc) {
+    if (target_qubit_index < inner_qc) {
+        H_gate(target_qubit_index, state, dim);
+    } else {
+        MPIutil &m = MPIutil::get_inst();
+        const int rank = m.get_rank();
+        ITYPE dim_work = dim;
+        ITYPE num_work = 0;
+        CTYPE *t = m.get_workarea(&dim_work, &num_work);
+        assert(num_work > 0);
+        const int pair_rank_bit = 1 << (target_qubit_index - inner_qc);
+        const int pair_rank = rank ^ pair_rank_bit;
+
+#ifdef _OPENMP
+        OMPutil::get_inst().set_qulacs_num_threads(dim_work, 13);
+#endif
+
+        CTYPE *si = state;
+        for (UINT i = 0; i < (UINT)num_work; ++i) {
+            m.m_DC_sendrecv_compressed(
+                si, t, dim_work, pair_rank, ABS, 0.05, 0.0, 0.0);
 
             _H_gate_mpi(t, si, dim_work, rank & pair_rank_bit);
 
