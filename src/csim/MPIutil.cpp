@@ -146,16 +146,28 @@ void MPIutil::m_DC_sendrecv_compressed(void *sendbuf, void *recvbuf, int count,
     const size_t elem_count = static_cast<size_t>(count) * 2;
     const size_t raw_bytes = static_cast<size_t>(count) * sizeof(CTYPE);
     size_t out_size = 0;
+    const double comp_start = MPI_Wtime();
     unsigned char *compressed =
         SZ_compress_args(SZ_DOUBLE, sendbuf, &out_size, errBoundMode,
             absErrBound, relBoundRatio, pwrBoundRatio, 1, 1, 1, 1, elem_count);
+    const double comp_end = MPI_Wtime();
+    compress_overhead_time_sum += (comp_end - comp_start);
+
+    if (raw_bytes > 0) {
+        compress_ratio_sum +=
+            static_cast<double>(out_size) / static_cast<double>(raw_bytes);
+        compress_ratio_count++;
+    }
 
     uint64_t send_size = static_cast<uint64_t>(out_size);
     uint64_t recv_size = 0;
+    const double size_comm_start = MPI_Wtime();
     UINT ret = MPI_Sendrecv(&send_size, 1, MPI_UINT64_T, pair_rank, mpi_tag1,
         &recv_size, 1, MPI_UINT64_T, pair_rank, mpi_tag2, mpicomm, &mpistat);
+    const double size_comm_end = MPI_Wtime();
     if (ret != MPI_SUCCESS)
         MPIFunctionError("MPI_Sendrecv(size)", ret, __FILE__, __LINE__);
+    compress_overhead_time_sum += (size_comm_end - size_comm_start);
 
     std::vector<unsigned char> recv_bytes(recv_size);
     ret = MPI_Sendrecv(compressed, static_cast<int>(send_size), MPI_BYTE,
@@ -164,33 +176,12 @@ void MPIutil::m_DC_sendrecv_compressed(void *sendbuf, void *recvbuf, int count,
     if (ret != MPI_SUCCESS)
         MPIFunctionError("MPI_Sendrecv(bytes)", ret, __FILE__, __LINE__);
 
+    const double decomp_start = MPI_Wtime();
     void *decompressed = SZ_decompress(SZ_DOUBLE, recv_bytes.data(),
         static_cast<size_t>(recv_size), 1, 1, 1, 1, elem_count);
-    auto *send_complex = static_cast<CTYPE *>(sendbuf);
-    auto *decompressed_d = static_cast<double *>(decompressed);
-    const int size = get_size();
-    /*for (int r = 0; r < size; ++r) {
-        if (mpirank == r) {
-            for (int i = 0; i < count; ++i) {
-                std::printf("rank=%d seq=%" PRIu64
-                            " pair=%d sendbuf[%d]=(%0.17g,%0.17g)\n",
-                    mpirank, call_seq, pair_rank, i, send_complex[i].real(),
-                    send_complex[i].imag());
-            }
-            std::printf("rank=%d seq=%" PRIu64
-                        " pair=%d raw_bytes=%zu compressed_bytes=%zu\n",
-                mpirank, call_seq, pair_rank, raw_bytes, out_size);
-            for (int i = 0; i < count; ++i) {
-                std::printf("rank=%d seq=%" PRIu64
-                            " pair=%d decompressed[%d]=(%0.17g,%0.17g)\n",
-                    mpirank, call_seq, pair_rank, i,
-                    decompressed_d[static_cast<size_t>(i) * 2],
-                    decompressed_d[static_cast<size_t>(i) * 2 + 1]);
-            }
-            std::fflush(stdout);
-        }
-        barrier();
-    }*/
+    const double decomp_end = MPI_Wtime();
+    compress_overhead_time_sum += (decomp_end - decomp_start);
+
     std::memcpy(recvbuf, decompressed, elem_count * sizeof(double));
 
     free_buf(decompressed);

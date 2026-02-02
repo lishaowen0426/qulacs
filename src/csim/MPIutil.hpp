@@ -27,6 +27,9 @@ private:
     MPI_Request mpireq[_MAX_REQUESTS];
     UINT mpireq_idx = 0;
     UINT mpireq_cnt = 0;
+    double compress_overhead_time_sum = 0.0;
+    double compress_ratio_sum = 0.0;
+    uint64_t compress_ratio_count = 0;
 
     static void MPIFunctionError(
         const std::string &func, UINT ret, const std::string &file, UINT line);
@@ -78,5 +81,20 @@ public:
     void s_DC_allreduce(void *buf);
     void s_u_bcast(UINT *a);
     void s_D_bcast(double *a);
+    double get_compress_overhead_time_sum() const {
+        return compress_overhead_time_sum;
+    }
+    void reset_compress_overhead_time_sum() {
+        compress_overhead_time_sum = 0.0;
+    }
+    double get_compress_ratio_avg() const {
+        return compress_ratio_count > 0
+            ? (compress_ratio_sum / static_cast<double>(compress_ratio_count))
+            : 0.0;
+    }
+    void reset_compress_ratio_avg() {
+        compress_ratio_sum = 0.0;
+        compress_ratio_count = 0;
+    }
 };
 #endif

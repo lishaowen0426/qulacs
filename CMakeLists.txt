@@ -428,6 +428,7 @@ message(STATUS "CMAKE_CXX_FLAGS_RELEASE = ${CMAKE_CXX_FLAGS_RELEASE}")
 
 ##### add make directories #####
 add_subdirectory(src)
+add_subdirectory(insitu_benchmark)
 
 if(USE_TEST)
 	add_subdirectory(test)
