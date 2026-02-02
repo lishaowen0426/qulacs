@@ -33,13 +33,18 @@ find_library(ZSTD_LIB
     NO_DEFAULT_PATH
 )
 if (NOT ZSTD_LIB)
-    find_library(ZSTD_LIB REQUIRED zstd)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ZSTD REQUIRED libzstd)
+    set(ZSTD_LIB ${ZSTD_LINK_LIBRARIES})
 endif()
 
 target_compile_features(insitu_benchmark PRIVATE cxx_std_17)
 target_link_libraries(insitu_benchmark PRIVATE cppsim_static MPI::MPI_CXX ${COMPRESSOR_LIBS})
 if (ZSTD_LIB)
     target_link_libraries(insitu_benchmark PRIVATE ${ZSTD_LIB})
+    if (ZSTD_LIBRARY_DIRS)
+        target_link_directories(insitu_benchmark PRIVATE ${ZSTD_LIBRARY_DIRS})
+    endif()
 endif()
 target_include_directories(insitu_benchmark PRIVATE
     ${CMAKE_SOURCE_DIR}/src/blaz
