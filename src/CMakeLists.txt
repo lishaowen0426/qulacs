@@ -13,3 +13,4 @@ endif()
 
 add_subdirectory(cppsim)
 add_subdirectory(vqcsim)
+add_subdirectory(blaz)

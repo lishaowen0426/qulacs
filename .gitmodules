@@ -1,3 +1,6 @@
 [submodule "compressor/SZ3"]
 	path = compressor/SZ3
 	url = git@github.com:lishaowen0426/SZ3.git
+[submodule "compressor/spdlog"]
+	path = compressor/spdlog
+	url = git@github.com:gabime/spdlog.git
