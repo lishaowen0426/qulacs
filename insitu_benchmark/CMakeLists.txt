@@ -11,12 +11,21 @@ find_package(MPI REQUIRED)
 
 set(COMPRESSOR_PREFIX "${CMAKE_SOURCE_DIR}/compressor/install")
 set(COMPRESSOR_INCLUDE_DIR "${COMPRESSOR_PREFIX}/include")
-set(COMPRESSOR_LIB_DIR "${COMPRESSOR_PREFIX}/lib")
-file(GLOB COMPRESSOR_LIBS
-    "${COMPRESSOR_LIB_DIR}/*.a"
-    "${COMPRESSOR_LIB_DIR}/*.so"
-    "${COMPRESSOR_LIB_DIR}/*.dylib"
+set(COMPRESSOR_LIB_DIRS
+    "${COMPRESSOR_PREFIX}/lib"
+    "${COMPRESSOR_PREFIX}/lib64"
 )
+set(COMPRESSOR_LIBS "")
+foreach(lib_dir IN LISTS COMPRESSOR_LIB_DIRS)
+    if (EXISTS "${lib_dir}")
+        file(GLOB _libs
+            "${lib_dir}/*.a"
+            "${lib_dir}/*.so"
+            "${lib_dir}/*.dylib"
+        )
+        list(APPEND COMPRESSOR_LIBS ${_libs})
+    endif()
+endforeach()
 
 target_compile_features(insitu_benchmark PRIVATE cxx_std_17)
 target_link_libraries(insitu_benchmark PRIVATE cppsim_static MPI::MPI_CXX ${COMPRESSOR_LIBS})
