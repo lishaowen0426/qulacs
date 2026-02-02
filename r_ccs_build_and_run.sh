@@ -2,6 +2,8 @@
 set -euo pipefail
 set +x
 
+cd "${HOME}/qulacs"
+
 num_of_rank=4
 qubits=(12)
 
