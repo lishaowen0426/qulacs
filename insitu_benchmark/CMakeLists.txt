@@ -27,8 +27,20 @@ foreach(lib_dir IN LISTS COMPRESSOR_LIB_DIRS)
     endif()
 endforeach()
 
+find_library(ZSTD_LIB
+    NAMES zstd
+    PATHS ${COMPRESSOR_LIB_DIRS}
+    NO_DEFAULT_PATH
+)
+if (NOT ZSTD_LIB)
+    find_library(ZSTD_LIB REQUIRED zstd)
+endif()
+
 target_compile_features(insitu_benchmark PRIVATE cxx_std_17)
 target_link_libraries(insitu_benchmark PRIVATE cppsim_static MPI::MPI_CXX ${COMPRESSOR_LIBS})
+if (ZSTD_LIB)
+    target_link_libraries(insitu_benchmark PRIVATE ${ZSTD_LIB})
+endif()
 target_include_directories(insitu_benchmark PRIVATE
     ${CMAKE_SOURCE_DIR}/src/blaz
     ${CMAKE_SOURCE_DIR}/src/cppsim
