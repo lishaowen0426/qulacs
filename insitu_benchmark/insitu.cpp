@@ -206,7 +206,6 @@ int run_comp_on_mpi(int argc, char **argv) {
     circuit->update_quantum_state(&initial_state);
     const auto sim_end = std::chrono::steady_clock::now();
     const std::chrono::duration<double> sim_elapsed = sim_end - sim_start;
-    spdlog::set_pattern("%v");
     const double sim_time = sim_elapsed.count();
     const double comp_time =
         MPIutil::get_inst().get_compress_overhead_time_sum();
