@@ -7,4 +7,3 @@ file(GLOB BLAZ_SRC
     "*.h")
 
 add_library(blaz_static STATIC ${BLAZ_SRC})
-target_link_libraries(blaz_static csim_static)

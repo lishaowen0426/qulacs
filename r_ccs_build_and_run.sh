@@ -5,7 +5,7 @@ set +x
 cd "${HOME}/qulacs"
 
 num_of_rank=4
-qubits=(12)
+qubits=(12 16 20 24 28 32)
 
 ./script/build_mpicc.sh >/dev/null 2>&1
 

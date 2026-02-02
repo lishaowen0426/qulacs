@@ -6,9 +6,6 @@
 #include <numeric>
 
 namespace {
-constexpr std::size_t kBlockSize = 64;
-constexpr std::size_t kKeepRatioNum = 3;
-constexpr std::size_t kKeepRatioDen = 4;
 constexpr std::size_t kBinBits = sizeof(BinType) * 8;
 constexpr double kBinRadius = (1ULL << (kBinBits - 1)) - 1.0;
 constexpr std::size_t kMaskWordBits = sizeof(MaskWord) * 8;
@@ -115,7 +112,7 @@ void dct_1d_from_state(const CTYPE* state, std::size_t block_idx,
         double sum = 0.0;
         for (std::size_t t = 0; t < n; ++t) {
             const CTYPE v = state[base + t];
-            const double x = real_part ? _creal(v) : _cimag(v);
+            const double x = real_part ? std::real(v) : std::imag(v);
             const double angle = pi * (static_cast<double>(t) + 0.5) *
                                  static_cast<double>(k) * inv_n;
             sum += x * std::cos(angle);
@@ -141,19 +138,28 @@ void idct_1d(const double* in, double* out, std::size_t n) {
 }
 }  // namespace
 
+BlazConfig& blaz_config() {
+    static BlazConfig cfg;
+    return cfg;
+}
+
 BlazCompressedComplex blaz_compress_1d_complex_array(CTYPE* state, ITYPE dim) {
     (void)state;
 
     BlazCompressedComplex out;
+    const BlazConfig& cfg = blaz_config();
+    assert(cfg.block_size > 0);
+    assert(cfg.keep_den > 0);
+    assert(cfg.keep_num <= cfg.keep_den);
     const std::size_t total = static_cast<std::size_t>(dim);
-    const std::size_t block_size = (total < kBlockSize) ? total : kBlockSize;
+    const std::size_t block_size =
+        (total < cfg.block_size) ? total : cfg.block_size;
     out.s = {total};
     out.i = {block_size};
-    static_assert(kBlockSize % kKeepRatioDen == 0,
-        "kBlockSize must be divisible by kKeepRatioDen");
-    const bool keep_all = (total < kBlockSize);
+    assert(block_size % cfg.keep_den == 0);
+    const bool keep_all = (total < cfg.block_size);
     const std::size_t keep_count =
-        keep_all ? block_size : (block_size * kKeepRatioNum / kKeepRatioDen);
+        keep_all ? block_size : (block_size * cfg.keep_num / cfg.keep_den);
     assert(total % block_size == 0);
     const std::size_t num_blocks = total / block_size;
 
@@ -228,7 +234,7 @@ void blaz_decompress_1d_complex_array(
     const std::size_t block = comp->i[0];
     assert(block > 0);
     assert(total % block == 0);
-    if (total < kBlockSize) {
+    if (total < blaz_config().block_size) {
         assert(block == total);
     }
     const std::size_t num_blocks = total / block;
@@ -295,7 +301,7 @@ void blaz_decompress_1d_complex_array(
         idct_1d(coeff.data(), time.data(), block);
         for (std::size_t t = 0; t < block; ++t) {
             const std::size_t pos = b * block + t;
-            out_state[pos] = CTYPE(_creal(out_state[pos]), time[t]);
+            out_state[pos] = CTYPE(std::real(out_state[pos]), time[t]);
         }
     }
 }

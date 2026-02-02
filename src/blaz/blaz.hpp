@@ -1,12 +1,23 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <complex>
 #include <vector>
 
-#include "csim/type.hpp"
+using CTYPE = std::complex<double>;
+using ITYPE = unsigned long long;
 
 using MaskWord = uint64_t;
 using BinType = int32_t;
+
+struct BlazConfig {
+    std::size_t block_size = 64;
+    std::size_t keep_num = 3;
+    std::size_t keep_den = 4;
+};
+
+BlazConfig& blaz_config();
 
 struct BlazCompressedComplex {
     std::vector<std::size_t> s;

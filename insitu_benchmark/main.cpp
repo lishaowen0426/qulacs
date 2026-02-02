@@ -12,7 +12,7 @@
 #include "spdlog/spdlog.h"
 
 namespace {
-std::string make_log_filename(const char* argv0) {
+std::string make_log_filename(const char *argv0) {
     const auto now = std::chrono::system_clock::now();
     const std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tm{};
@@ -35,14 +35,17 @@ std::string make_log_filename(const char* argv0) {
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
+    /*
     auto logger =
         spdlog::basic_logger_mt("insitu_file", make_log_filename(argv[0]));
     spdlog::set_default_logger(logger);
     spdlog::set_pattern("%v");
+    */
 
     int ret = 0;
     try {
-        ret = run_comp_on_mpi(argc, argv);
+        // ret = run_comp_on_mpi(argc, argv);
+        ret = benchmark_blaz(argc, argv);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         ret = 1;

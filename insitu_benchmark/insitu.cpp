@@ -1,17 +1,28 @@
 #include "insitu.hpp"
 
 #include <mpi.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <limits>
+#include <random>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#endif
 
 #include "SZ3/api/sz.hpp"
+#include "blaz/blaz.hpp"
 #include "cppsim/circuit.hpp"
 #include "cppsim/gate_factory.hpp"
 #include "csim/MPIutil.hpp"
@@ -231,14 +242,173 @@ int run_comp_on_mpi(int argc, char **argv) {
     if (rank == 0) {
         const double ratio_avg = ratio_sum / static_cast<double>(size);
         spdlog::info(
-            "comp_time_ratio_min={:.6f} comp_time_ratio_max={:.6f} comp_time_ratio_avg={:.6f}",
+            "comp_time_ratio_min={:.6f} comp_time_ratio_max={:.6f} "
+            "comp_time_ratio_avg={:.6f}",
             ratio_min, ratio_max, ratio_avg);
         const double comp_ratio_avg_all =
             comp_ratio_sum / static_cast<double>(size);
         spdlog::info(
-            "comp_bytes_ratio_min={:.6f} comp_bytes_ratio_max={:.6f} comp_bytes_ratio_avg={:.6f}",
+            "comp_bytes_ratio_min={:.6f} comp_bytes_ratio_max={:.6f} "
+            "comp_bytes_ratio_avg={:.6f}",
             comp_ratio_min, comp_ratio_max, comp_ratio_avg_all);
     }
 
+    return 0;
+}
+
+namespace {
+std::vector<CTYPE> normalize_state(std::vector<CTYPE> state) {
+    long double norm_sq = 0.0L;
+    for (const auto &v : state) {
+        const long double re = std::real(v);
+        const long double im = std::imag(v);
+        norm_sq += re * re + im * im;
+    }
+    const long double norm = std::sqrt(norm_sq);
+    if (norm == 0.0L) {
+        return state;
+    }
+    for (auto &v : state) {
+        v /= static_cast<double>(norm);
+    }
+    return state;
+}
+
+double tvd_prob(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
+    long double sum = 0.0L;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const long double ar = std::real(a[i]);
+        const long double ai = std::imag(a[i]);
+        const long double br = std::real(b[i]);
+        const long double bi = std::imag(b[i]);
+        const long double pa = ar * ar + ai * ai;
+        const long double pb = br * br + bi * bi;
+        sum += std::fabs(pa - pb);
+    }
+    return static_cast<double>(0.5L * sum);
+}
+
+double fidelity(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
+    CTYPE inner = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        inner += std::conj(a[i]) * b[i];
+    }
+    const double mag = std::abs(inner);
+    return mag * mag;
+}
+
+void write_state(const std::string &path, const std::vector<CTYPE> &state) {
+    std::ofstream out(path);
+    out << std::setprecision(17);
+    for (std::size_t i = 0; i < state.size(); ++i) {
+        out << i << " " << std::real(state[i]) << " " << std::imag(state[i])
+            << "\n";
+    }
+}
+
+void ensure_output_dir(const std::string &dir) {
+    std::filesystem::create_directories(dir);
+}
+
+std::vector<CTYPE> make_random_gaussian(std::size_t dim, std::mt19937 &rng) {
+    std::normal_distribution<double> dist(0.0, 1.0);
+    std::vector<CTYPE> v(dim);
+    for (std::size_t i = 0; i < dim; ++i) {
+        v[i] = CTYPE(dist(rng), dist(rng));
+    }
+    return normalize_state(std::move(v));
+}
+
+std::vector<CTYPE> make_low_freq(std::size_t dim) {
+    const double two_pi = 2.0 * 3.14159265358979323846;
+    std::vector<CTYPE> v(dim);
+    for (std::size_t i = 0; i < dim; ++i) {
+        const double x = two_pi * static_cast<double>(i) / dim;
+        const double mag = 1.0 + 0.5 * std::sin(x);
+        v[i] = CTYPE(mag * std::sin(x), mag * std::cos(x));
+    }
+    return normalize_state(std::move(v));
+}
+
+std::vector<CTYPE> make_high_freq(std::size_t dim) {
+    const double two_pi = 2.0 * 3.14159265358979323846;
+    const double freq = static_cast<double>(dim) / 4.0;
+    std::vector<CTYPE> v(dim);
+    for (std::size_t i = 0; i < dim; ++i) {
+        const double x = two_pi * freq * static_cast<double>(i) / dim;
+        const double mag =
+            1.0 + 0.5 * std::sin(two_pi * static_cast<double>(i) / (dim / 16.0));
+        v[i] = CTYPE(mag * std::sin(x), mag * std::cos(x));
+    }
+    return normalize_state(std::move(v));
+}
+
+std::vector<CTYPE> make_sparse(std::size_t dim, std::mt19937 &rng) {
+    std::uniform_int_distribution<std::size_t> idx_dist(0, dim - 1);
+    std::normal_distribution<double> val_dist(0.0, 1.0);
+    std::vector<CTYPE> v(dim, CTYPE(0.0, 0.0));
+    const std::size_t k = std::min<std::size_t>(16, dim);
+    for (std::size_t i = 0; i < k; ++i) {
+        const std::size_t idx = idx_dist(rng);
+        v[idx] = CTYPE(val_dist(rng), val_dist(rng));
+    }
+    return normalize_state(std::move(v));
+}
+}  // namespace
+
+int benchmark_blaz(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    const std::size_t dim = 4096;
+    const std::vector<std::size_t> block_sizes = {64, 128, 256, 512};
+    const std::vector<std::pair<std::size_t, std::size_t>> ratios = {
+        {1, 1}, {7, 8}, {3, 4}, {1, 2}, {1, 4}};
+
+    std::mt19937 rng(12345);
+    const std::vector<std::pair<const char *, std::vector<CTYPE>>> families = {
+        {"random_gaussian", make_random_gaussian(dim, rng)},
+        {"low_freq", make_low_freq(dim)},
+        {"high_freq", make_high_freq(dim)},
+        {"sparse", make_sparse(dim, rng)},
+    };
+
+    const std::string out_root = "results/benchmark_blaz";
+    ensure_output_dir(out_root);
+    std::cout << "blaz benchmark dim=" << dim << "\n";
+    for (const auto &fam : families) {
+        std::cout << "\nfamily: " << fam.first << "\n";
+        const std::string fam_dir = out_root + "/" + fam.first;
+        ensure_output_dir(fam_dir);
+        write_state(fam_dir + "/original.txt", fam.second);
+        for (std::size_t bs : block_sizes) {
+            for (const auto &ratio : ratios) {
+                BlazConfig &cfg = blaz_config();
+                cfg.block_size = bs;
+                cfg.keep_num = ratio.first;
+                cfg.keep_den = ratio.second;
+                if (dim % bs != 0 || bs % cfg.keep_den != 0) {
+                    continue;
+                }
+
+                std::vector<CTYPE> restored(dim);
+                BlazCompressedComplex comp = blaz_compress_1d_complex_array(
+                    const_cast<CTYPE *>(fam.second.data()),
+                    static_cast<ITYPE>(dim));
+                blaz_decompress_1d_complex_array(&comp, restored.data());
+
+                const double tvd = tvd_prob(fam.second, restored);
+                const double fid = fidelity(fam.second, restored);
+                write_state(fam_dir + "/block" + std::to_string(bs) + "_keep" +
+                                std::to_string(ratio.first) + "of" +
+                                std::to_string(ratio.second) + ".txt",
+                    restored);
+                std::cout << "  block=" << bs << " keep=" << ratio.first << "/"
+                          << ratio.second << " tvd=" << std::setprecision(6)
+                          << std::scientific << tvd
+                          << " fid=" << std::setprecision(6) << std::scientific
+                          << fid << "\n";
+            }
+        }
+    }
     return 0;
 }

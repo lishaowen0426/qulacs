@@ -33,6 +33,8 @@ target_include_directories(csim_static PRIVATE ${COMPRESSOR_INCLUDE_DIR})
 target_include_directories(csim_shared PRIVATE ${COMPRESSOR_INCLUDE_DIR})
 target_link_libraries(csim_static PRIVATE ${COMPRESSOR_LIBS})
 target_link_libraries(csim_shared PRIVATE ${COMPRESSOR_LIBS})
+target_link_libraries(csim_static PUBLIC blaz_static)
+target_link_libraries(csim_shared PUBLIC blaz_static)
 
 if (MSVC)
     set_target_properties(csim_static PROPERTIES LINKER_LANGUAGE CXX)
