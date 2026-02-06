@@ -32,3 +32,5 @@ struct BlazCompressedComplex {
 BlazCompressedComplex blaz_compress_1d_complex_array(CTYPE* state, ITYPE dim);
 void blaz_decompress_1d_complex_array(
     const BlazCompressedComplex* comp, CTYPE* out_state);
+CTYPE blaz_dot_product(
+    const BlazCompressedComplex* a, const BlazCompressedComplex* b);

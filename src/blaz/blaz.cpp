@@ -1,4 +1,4 @@
-#include "blaz/blaz.hpp"
+#include "blaz.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -135,6 +135,13 @@ void idct_1d(const double* in, double* out, std::size_t n) {
         }
         out[t] = sum;
     }
+}
+
+double specified_coeff(BinType q, double block_max) {
+    if (block_max == 0.0) {
+        return 0.0;
+    }
+    return (static_cast<double>(q) * block_max) / kBinRadius;
 }
 }  // namespace
 
@@ -275,8 +282,7 @@ void blaz_decompress_1d_complex_array(
                 if (!mask_get(comp->mask, b * block + idx)) {
                     continue;
                 }
-                const double q = static_cast<double>(comp->F_r[fr_idx++]);
-                coeff[idx] = (q * comp->N_r[b]) / kBinRadius;
+                coeff[idx] = specified_coeff(comp->F_r[fr_idx++], comp->N_r[b]);
             }
         } else {
             fr_idx += kept_this_block;
@@ -292,8 +298,7 @@ void blaz_decompress_1d_complex_array(
                 if (!mask_get(comp->mask, b * block + idx)) {
                     continue;
                 }
-                const double q = static_cast<double>(comp->F_i[fi_idx++]);
-                coeff[idx] = (q * comp->N_i[b]) / kBinRadius;
+                coeff[idx] = specified_coeff(comp->F_i[fi_idx++], comp->N_i[b]);
             }
         } else {
             fi_idx += kept_this_block;
@@ -304,4 +309,84 @@ void blaz_decompress_1d_complex_array(
             out_state[pos] = CTYPE(std::real(out_state[pos]), time[t]);
         }
     }
+}
+
+CTYPE blaz_dot_product(
+    const BlazCompressedComplex* a, const BlazCompressedComplex* b) {
+    assert(a != nullptr);
+    assert(b != nullptr);
+    assert(a->s.size() == 1);
+    assert(b->s.size() == 1);
+    assert(a->i.size() == 1);
+    assert(b->i.size() == 1);
+    assert(a->s[0] == b->s[0]);
+    assert(a->i[0] == b->i[0]);
+
+    const std::size_t total = a->s[0];
+    const std::size_t block = a->i[0];
+    assert(block > 0);
+    assert(total % block == 0);
+    const std::size_t num_blocks = total / block;
+
+    assert(a->mask.size() == mask_words(num_blocks * block));
+    assert(b->mask.size() == mask_words(num_blocks * block));
+    assert(a->N_r.size() == num_blocks);
+    assert(a->N_i.size() == num_blocks);
+    assert(b->N_r.size() == num_blocks);
+    assert(b->N_i.size() == num_blocks);
+
+    const auto kept_count = [&](const BlazCompressedComplex* comp) {
+        std::size_t count = 0;
+        for (std::size_t b_idx = 0; b_idx < num_blocks; ++b_idx) {
+            for (std::size_t idx = 0; idx < block; ++idx) {
+                if (mask_get(comp->mask, b_idx * block + idx)) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    assert(a->F_r.size() == kept_count(a));
+    assert(a->F_i.size() == kept_count(a));
+    assert(b->F_r.size() == kept_count(b));
+    assert(b->F_i.size() == kept_count(b));
+
+    double sum_real = 0.0;
+    double sum_imag = 0.0;
+    std::size_t fr_a = 0;
+    std::size_t fi_a = 0;
+    std::size_t fr_b = 0;
+    std::size_t fi_b = 0;
+
+    for (std::size_t b_idx = 0; b_idx < num_blocks; ++b_idx) {
+        const std::size_t base = b_idx * block;
+
+        for (std::size_t idx = 0; idx < block; ++idx) {
+            const bool keep_a = mask_get(a->mask, base + idx);
+            const bool keep_b = mask_get(b->mask, base + idx);
+
+            double ar = 0.0;
+            double ai = 0.0;
+            double br = 0.0;
+            double bi = 0.0;
+
+            if (keep_a) {
+                ar = specified_coeff(a->F_r[fr_a++], a->N_r[b_idx]);
+                ai = specified_coeff(a->F_i[fi_a++], a->N_i[b_idx]);
+            }
+            if (keep_b) {
+                br = specified_coeff(b->F_r[fr_b++], b->N_r[b_idx]);
+                bi = specified_coeff(b->F_i[fi_b++], b->N_i[b_idx]);
+            }
+
+            if (!keep_a || !keep_b) {
+                continue;
+            }
+
+            sum_real += (ar * br) - (ai * bi);
+            sum_imag += (ar * bi) + (ai * br);
+        }
+    }
+
+    return CTYPE(sum_real, sum_imag);
 }
