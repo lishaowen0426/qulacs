@@ -4,3 +4,6 @@
 [submodule "compressor/spdlog"]
 	path = compressor/spdlog
 	url = git@github.com:gabime/spdlog.git
+[submodule "compressor/QASMBench"]
+	path = compressor/QASMBench
+	url = git@github.com:lishaowen0426/QASMBench.git
