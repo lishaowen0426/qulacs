@@ -563,28 +563,25 @@ def choose_next_support(
     return S_next
 
 
-class TopologicalSorterRZ_RZZ_SX:
+class TopologicalSorterRZ_RZZ_SX_CX:
     def sort(self, circuit: QuantumCircuit) -> dict[int, list[DAGOpNode]]:
         dag: DAGCircuit = circuit_to_dag(circuit)
         qubit_to_index = {q: i for i, q in enumerate(circuit.qubits)}
 
-        depth: dict[DAGOpNode, int] = {}
-        for node in dag.topological_op_nodes():
-            preds = [p for p in dag.predecessors(node) if isinstance(p, DAGOpNode)]
-            if preds:
-                depth[node] = 1 + max(depth[p] for p in preds)
-            else:
-                depth[node] = 0
-
         buckets: dict[int, list[DAGOpNode]] = {}
-        for node in dag.topological_op_nodes():
-            buckets.setdefault(depth[node], []).append(node)
+        depth_idx = 0
+        for layer in dag.layers():
+            ops = list(layer["graph"].op_nodes())
+            if not ops:
+                continue
+            buckets[depth_idx] = ops
+            depth_idx += 1
 
         def gate_class(n: DAGOpNode) -> int:
             name = n.op.name
             if name in {"rz", "rzz"}:
                 return 0
-            if name == "sx":
+            if name in {"sx", "cx"}:
                 return 1
             raise ValueError(f"Unexpected gate type in sorter: {name}")
 
@@ -598,6 +595,9 @@ class TopologicalSorterRZ_RZZ_SX:
                 return (min(a, b), max(a, b))
             if name == "sx":
                 return (qs[0],)
+            if name == "cx":
+                c, t = qs[0], qs[1]
+                return (c, t)
             raise ValueError(f"Unexpected gate type in sorter: {name}")
 
         def stable_id(n: DAGOpNode) -> int:
@@ -716,7 +716,7 @@ class QFTOptimizer:
     def topological_sort(self) -> None:
         if self.fused_circuit is None:
             raise RuntimeError("Call preprocess() before topological_sort().")
-        sorter = TopologicalSorterRZ_RZZ_SX()
+        sorter = TopologicalSorterRZ_RZZ_SX_CX()
         self.sorted_ops = sorter.sort(self.fused_circuit)
 
     def compression_tile(self) -> None:
@@ -1019,7 +1019,7 @@ if __name__ == "__main__":
     )
     optimizer.preprocess()
     optimizer.topological_sort()
-    optimizer.compression_tile()
-    optimizer.validate_group()
-    optimizer.post_processing()
-    optimizer.print_groups()
+#  optimizer.compression_tile()
+#  optimizer.validate_group()
+#  optimizer.post_processing()
+#  optimizer.print_groups()
