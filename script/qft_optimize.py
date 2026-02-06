@@ -19,8 +19,8 @@ from qiskit.qasm2 import dump as qasm2_dump
 from qiskit.version import VERSION as QISKIT_VERSION
 
 
-QFT_QASM_PATH = Path("compressor/QASMBench/medium/qft_n18/qft_n18_transpiled.qasm")
-# QFT_QASM_PATH = Path("compressor/QASMBench/large/qft_n63/qft_n63_transpiled.qasm")
+# QFT_QASM_PATH = Path("compressor/QASMBench/medium/qft_n18/qft_n18_transpiled.qasm")
+QFT_QASM_PATH = Path("compressor/QASMBench/large/qft_n29/qft_n29_transpiled.qasm")
 OUTPUT_FOLDER = Path("results/qft_opt")
 DEFAULT_DAG_CACHE_FOLDER = Path("results/qft_opt/.dag_cache")
 ALLOWED_GATES = {"rz", "sx", "cx", "x"}
