@@ -417,6 +417,8 @@ def compress_group_construction(
             return {qs[0]}
         if name == "rzz":
             return {qs[0], qs[1]}
+        if name == "cx":
+            return {qs[0], qs[1]}
         if name == "sx":
             return {qs[0]}
         raise ValueError(f"Unexpected gate type in compress_group_construction: {name}")
@@ -431,7 +433,7 @@ def compress_group_construction(
                 continue
             node = ops[i]
             name = gate_name(node)
-            if name == "sx":
+            if name in {"sx", "cx"}:
                 continue
 
             T = targets(node)
@@ -451,25 +453,32 @@ def compress_group_construction(
         diag_ops.append(node)
         S_cur |= targets(node)
 
-    # Step 2: select one sx as terminator if any remains
+    # Step 2: select one barrier (sx or cx) as terminator if any remains
     for i in range(len(ops)):
         if not mask[i] or scheduled_mask[i]:
             continue
         node = ops[i]
-        if gate_name(node) == "sx":
-            q = qubits(node)[0]
-            terminator = node
-            scheduled_mask.set(i)
-            stop_reason = "hit_sx_conflict" if q in S_cur else "hit_sx_nonconflict"
-            group = Group(
-                depth=depth,
-                diag_ops=diag_ops,
-                terminator=terminator,
-                kind="diagonal",
-                S_out=S_cur,
-                stop_reason=stop_reason,
-            )
-            return group, scheduled_mask
+        name = gate_name(node)
+        if name not in {"sx", "cx"}:
+            continue
+
+        T = targets(node)
+        terminator = node
+        scheduled_mask.set(i)
+        is_conflict = any(q in S_cur for q in T)
+        if name == "sx":
+            stop_reason = "hit_sx_conflict" if is_conflict else "hit_sx_nonconflict"
+        else:
+            stop_reason = "hit_cx_conflict" if is_conflict else "hit_cx_nonconflict"
+        group = Group(
+            depth=depth,
+            diag_ops=diag_ops,
+            terminator=terminator,
+            kind="diagonal",
+            S_out=S_cur,
+            stop_reason=stop_reason,
+        )
+        return group, scheduled_mask
 
     # Step 3: no sx taken -> diagonal group ends naturally
     if diag_ops:
@@ -523,6 +532,8 @@ def choose_next_support(
             return {qs[0]}
         if name == "rzz":
             return {qs[0], qs[1]}
+        if name == "cx":
+            return {qs[0], qs[1]}
         if name == "sx":
             return {qs[0]}
         raise ValueError(f"Unexpected gate type in choose_next_support: {name}")
@@ -544,11 +555,12 @@ def choose_next_support(
             node = ops_d[i]
             name = _gate_name(node)
 
-            if name == "sx":
-                q = _qubits(node)[0]
-                if q in S_next:
+            if name in {"sx", "cx"}:
+                T = _targets(node)
+                if any(q in S_next for q in T):
                     return S_next
-                blocked[q] = True
+                for q in T:
+                    blocked[q] = True
                 continue
 
             T = _targets(node)
@@ -894,6 +906,28 @@ class QFTOptimizer:
                 node_id = id(group.terminator)
                 if node_id not in node_to_depth:
                     raise RuntimeError("Group terminator not in sorted_ops.")
+                term_q = group.terminator.qargs[0]
+                if hasattr(term_q, "index"):
+                    term_idx = term_q.index
+                elif hasattr(term_q, "_index"):
+                    term_idx = term_q._index
+                else:
+                    raise AttributeError("Qubit has no index attribute")
+                term_targets = {term_idx}
+                if group.terminator.op.name == "cx":
+                    other_q = group.terminator.qargs[1]
+                    other_idx = (
+                        other_q.index if hasattr(other_q, "index") else other_q._index
+                    )
+                    term_targets = {term_idx, other_idx}
+                if group.stop_reason in {"hit_sx_conflict", "hit_cx_conflict"}:
+                    if not term_targets.issubset(group.S_out):
+                        raise RuntimeError("Conflicting terminator not in S_out.")
+                elif group.stop_reason in {"hit_sx_nonconflict", "hit_cx_nonconflict"}:
+                    if term_targets.intersection(group.S_out):
+                        raise RuntimeError("Non-conflicting terminator is in S_out.")
+                else:
+                    raise RuntimeError("Terminator present with invalid stop_reason.")
                 if node_id in scheduled:
                     raise RuntimeError("Node scheduled more than once.")
                 scheduled.add(node_id)
@@ -956,22 +990,37 @@ class QFTOptimizer:
 
             s_out_list = sorted(group.S_out)
             if group.terminator is not None:
-                if group.stop_reason == "hit_sx_conflict":
-                    term_type = "conflict"
-                elif group.stop_reason == "hit_sx_nonconflict":
-                    term_type = "nonconflict"
+                if group.stop_reason in {"hit_sx_conflict", "hit_sx_nonconflict"}:
+                    term_gate = "sx"
+                    term_type = (
+                        "conflict"
+                        if group.stop_reason.endswith("conflict")
+                        else "nonconflict"
+                    )
+                elif group.stop_reason in {"hit_cx_conflict", "hit_cx_nonconflict"}:
+                    term_gate = "cx"
+                    term_type = (
+                        "conflict"
+                        if group.stop_reason.endswith("conflict")
+                        else "nonconflict"
+                    )
                 else:
                     raise RuntimeError(
-                        "Terminator present but stop_reason is not an sx reason."
+                        "Terminator present but stop_reason is not a barrier reason."
                     )
                 print(
-                    f"depth={depth} diag_ops={diag_count} terminator={term_type} "
+                    f"depth={depth} diag_ops={diag_count} terminator={term_gate}:{term_type} "
                     f"S_out={s_card} S_out_set={s_out_list}"
                 )
             else:
-                if group.stop_reason in {"hit_sx_conflict", "hit_sx_nonconflict"}:
+                if group.stop_reason in {
+                    "hit_sx_conflict",
+                    "hit_sx_nonconflict",
+                    "hit_cx_conflict",
+                    "hit_cx_nonconflict",
+                }:
                     raise RuntimeError(
-                        "stop_reason indicates sx terminator but terminator is None."
+                        "stop_reason indicates barrier terminator but terminator is None."
                     )
                 print(
                     f"depth={depth} diag_ops={diag_count} terminator=None "
@@ -1019,7 +1068,7 @@ if __name__ == "__main__":
     )
     optimizer.preprocess()
     optimizer.topological_sort()
-#  optimizer.compression_tile()
-#  optimizer.validate_group()
-#  optimizer.post_processing()
-#  optimizer.print_groups()
+    optimizer.compression_tile()
+    optimizer.validate_group()
+    optimizer.post_processing()
+    optimizer.print_groups()
