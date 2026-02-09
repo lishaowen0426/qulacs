@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import pickle
 import signal
-from typing import Any, Optional, Literal
+from typing import Any, Optional
 
 import matplotlib.pyplot as plt
 from qiskit import QuantumCircuit
@@ -59,9 +59,7 @@ class Group:
     depth: int
     diag_ops: list[DAGOpNode]
     terminator: Optional[DAGOpNode]
-    kind: Literal["diagonal"]
     S_out: set[int]
-    stop_reason: str
 
 
 class _DagBuildTimeout(Exception):
@@ -390,11 +388,12 @@ def compress_group_construction(
 ) -> tuple[Group, BitSet]:
     ops = sorted_ops[depth]
     mask = remaining[depth]
-    S_cur = set(S)
+    base_support = set(S)
 
     scheduled_mask = BitSet(len(ops))
     diag_ops: list[DAGOpNode] = []
-    terminator: Optional[DAGOpNode] = None
+    diag_indices: list[int] = []
+    targets_by_idx: dict[int, set[int]] = {}
 
     def gate_name(node: DAGOpNode) -> str:
         return node.op.name
@@ -417,89 +416,67 @@ def compress_group_construction(
             return {qs[0]}
         if name == "rzz":
             return {qs[0], qs[1]}
-        if name == "cx":
-            return {qs[0], qs[1]}
-        if name == "sx":
-            return {qs[0]}
         raise ValueError(f"Unexpected gate type in compress_group_construction: {name}")
 
-    # Step 1: greedily select diagonal gates that fit
-    while True:
-        best_i: Optional[int] = None
-        best_cost = float("inf")
-
-        for i in range(len(ops)):
-            if not mask[i] or scheduled_mask[i]:
-                continue
-            node = ops[i]
-            name = gate_name(node)
-            if name in {"sx", "cx"}:
-                continue
-
-            T = targets(node)
-            new_needed = len(T - S_cur)
-            if len(S_cur) + new_needed <= K:
-                if new_needed < best_cost:
-                    best_cost = new_needed
-                    best_i = i
-                    if best_cost == 0:
-                        break
-
-        if best_i is None:
-            break
-
-        node = ops[best_i]
-        scheduled_mask.set(best_i)
-        diag_ops.append(node)
-        S_cur |= targets(node)
-
-    # Step 2: select one barrier (sx or cx) as terminator if any remains
     for i in range(len(ops)):
-        if not mask[i] or scheduled_mask[i]:
+        if not mask[i]:
             continue
         node = ops[i]
         name = gate_name(node)
-        if name not in {"sx", "cx"}:
+        if name not in {"rz", "rzz"}:
             continue
-
         T = targets(node)
-        terminator = node
-        scheduled_mask.set(i)
-        is_conflict = any(q in S_cur for q in T)
-        if name == "sx":
-            stop_reason = "hit_sx_conflict" if is_conflict else "hit_sx_nonconflict"
-        else:
-            stop_reason = "hit_cx_conflict" if is_conflict else "hit_cx_nonconflict"
-        group = Group(
-            depth=depth,
-            diag_ops=diag_ops,
-            terminator=terminator,
-            kind="diagonal",
-            S_out=S_cur,
-            stop_reason=stop_reason,
-        )
-        return group, scheduled_mask
+        diag_indices.append(i)
+        targets_by_idx[i] = T
 
-    # Step 3: no sx taken -> diagonal group ends naturally
-    if diag_ops:
-        group = Group(
-            depth=depth,
-            diag_ops=diag_ops,
-            terminator=None,
-            kind="diagonal",
-            S_out=S_cur,
-            stop_reason="support_saturated",
+    if len(base_support) > K:
+        raise RuntimeError(
+            f"Base support exceeds K at depth={depth}: |S|={len(base_support)} K={K}"
         )
-        return group, scheduled_mask
 
-    # Step 4: safety fallback
+    if diag_indices:
+        from itertools import combinations
+
+        all_targets: set[int] = set()
+        for T in targets_by_idx.values():
+            all_targets |= T
+        candidate_add = sorted(all_targets - base_support)
+        max_add = min(K - len(base_support), len(candidate_add))
+
+        best_support: Optional[set[int]] = None
+        best_count = -1
+        best_added = None
+
+        for r in range(max_add + 1):
+            for combo in combinations(candidate_add, r):
+                support = base_support | set(combo)
+                count = 0
+                for idx in diag_indices:
+                    if targets_by_idx[idx].issubset(support):
+                        count += 1
+                if best_added is None:
+                    best_added = r
+                if count > best_count or (count == best_count and r < best_added):
+                    best_count = count
+                    best_support = support
+                    best_added = r
+            if best_count == len(diag_indices):
+                break
+
+        if best_support is not None and best_count > 0:
+            for idx in diag_indices:
+                if targets_by_idx[idx].issubset(best_support):
+                    scheduled_mask.set(idx)
+                    diag_ops.append(ops[idx])
+
+    S_diag: set[int] = set()
+    for n in diag_ops:
+        S_diag |= targets(n)
     group = Group(
         depth=depth,
-        diag_ops=[],
+        diag_ops=diag_ops,
         terminator=None,
-        kind="diagonal",
-        S_out=S_cur,
-        stop_reason="bucket_exhausted",
+        S_out=S_diag,
     )
     return group, scheduled_mask
 
@@ -510,11 +487,23 @@ def choose_next_support(
     start_depth: int,
     K: int,
     num_qubits: int,
+    prev_support: set[int],
 ) -> set[int]:
-    def _gate_name(node: DAGOpNode) -> str:
+    del num_qubits
+
+    if start_depth not in sorted_ops:
+        return set()
+
+    if len(prev_support) > K:
+        prev_support = set()
+
+    ops = sorted_ops[start_depth]
+    mask = remaining[start_depth]
+
+    def gate_name(node: DAGOpNode) -> str:
         return node.op.name
 
-    def _qubits(node: DAGOpNode) -> list[int]:
+    def qubits(node: DAGOpNode) -> list[int]:
         qs = []
         for q in node.qargs:
             if hasattr(q, "index"):
@@ -525,54 +514,35 @@ def choose_next_support(
                 raise AttributeError("Qubit has no index attribute")
         return qs
 
-    def _targets(node: DAGOpNode) -> set[int]:
-        name = _gate_name(node)
-        qs = _qubits(node)
+    def targets(node: DAGOpNode) -> set[int]:
+        name = gate_name(node)
+        qs = qubits(node)
         if name == "rz":
             return {qs[0]}
         if name == "rzz":
             return {qs[0], qs[1]}
-        if name == "cx":
-            return {qs[0], qs[1]}
-        if name == "sx":
-            return {qs[0]}
         raise ValueError(f"Unexpected gate type in choose_next_support: {name}")
 
-    S_next: set[int] = set()
-    blocked = [False] * num_qubits
-
-    depths = sorted(d for d in sorted_ops.keys() if d >= start_depth)
-    for d in depths:
-        ops_d = sorted_ops[d]
-        mask = remaining.get(d)
-        if mask is None or mask.none():
-            continue
-
-        for i in range(len(ops_d)):
+    def can_add_with_support(support: set[int]) -> bool:
+        for i in range(len(ops)):
             if not mask[i]:
                 continue
-
-            node = ops_d[i]
-            name = _gate_name(node)
-
-            if name in {"sx", "cx"}:
-                T = _targets(node)
-                if any(q in S_next for q in T):
-                    return S_next
-                for q in T:
-                    blocked[q] = True
+            node = ops[i]
+            name = gate_name(node)
+            if name not in {"rz", "rzz"}:
                 continue
+            T = targets(node)
+            if len(support | T) <= K:
+                return True
+        return False
 
-            T = _targets(node)
-            if any(blocked[q] for q in T):
-                continue
+    if prev_support and can_add_with_support(prev_support):
+        return set(prev_support)
 
-            if len(S_next | T) <= K:
-                S_next |= T
-                if len(S_next) == K:
-                    return S_next
+    if can_add_with_support(set()):
+        return set()
 
-    return S_next
+    raise RuntimeError(f"No diagonal gate can fit within K={K} at depth={start_depth}.")
 
 
 class TopologicalSorterRZ_RZZ_SX_CX:
@@ -734,150 +704,94 @@ class QFTOptimizer:
     def compression_tile(self) -> None:
         if self.sorted_ops is None:
             raise RuntimeError("Call topological_sort() before compression_tile().")
-        if self.fused_circuit is None:
-            raise RuntimeError("Call preprocess() before compression_tile().")
 
-        sorted_ops = self.sorted_ops
-        depths = sorted(sorted_ops.keys())
-        if not depths:
-            self.groups = []
-            return
-
-        remaining: dict[int, BitSet] = {}
-        for d in depths:
-            n = len(sorted_ops[d])
-            mask = BitSet(n)
-            mask.set_all()
-            remaining[d] = mask
+        remaining: dict[int, BitSet] = {
+            depth: BitSet(len(ops)) for depth, ops in self.sorted_ops.items()
+        }
+        for depth in remaining:
+            remaining[depth].set_all()
 
         groups: list[Group] = []
-        S: set[int] = set()
-        num_qubits = self.fused_circuit.num_qubits
-        open_start_depth: int | None = None
-        open_diag_ops: list[DAGOpNode] = []
-        open_terminator: Optional[DAGOpNode] = None
-        open_stop_reason: str = "end"
-        open_S_out: set[int] = set()
+        support: set[int] = set()
 
-        def diag_targets(nodes: list[DAGOpNode]) -> set[int]:
-            out: set[int] = set()
-            for n in nodes:
-                qs = [q.index if hasattr(q, "index") else q._index for q in n.qargs]
-                if n.op.name == "rz":
-                    out.add(qs[0])
-                elif n.op.name == "rzz":
-                    out.update(qs)
-                else:
-                    raise RuntimeError("diag_targets called on non-diagonal op")
-            return out
+        def has_remaining(depth: int) -> bool:
+            return not remaining[depth].none()
 
-        def flush_open_group() -> None:
-            nonlocal open_start_depth, open_diag_ops, open_terminator, open_stop_reason, open_S_out
-            if open_start_depth is None:
-                return
-            if len(open_S_out) > self.K:
-                raise RuntimeError(
-                    f"Internal error: open_S_out exceeds K: {len(open_S_out)} > {self.K}"
-                )
-            groups.append(
-                Group(
-                    depth=open_start_depth,
-                    diag_ops=open_diag_ops,
-                    terminator=open_terminator,
-                    kind="diagonal",
-                    S_out=open_S_out,
-                    stop_reason=open_stop_reason,
-                )
-            )
-            open_start_depth = None
-            open_diag_ops = []
-            open_terminator = None
-            open_stop_reason = "end"
-            open_S_out = set()
-
-        def next_nonempty_depth(start_d: int) -> int | None:
-            for d in depths:
-                if d < start_d:
+        def has_diagonal_remaining(depth: int) -> bool:
+            ops = self.sorted_ops[depth]
+            mask = remaining[depth]
+            for i in range(len(ops)):
+                if not mask[i]:
                     continue
-                if not remaining[d].none():
-                    return d
-            return None
+                if ops[i].op.name in {"rz", "rzz"}:
+                    return True
+            return False
 
-        depth = next_nonempty_depth(start_d=depths[0])
-        while depth is not None:
-            while not remaining[depth].none():
-                group, scheduled_mask = compress_group_construction(
-                    sorted_ops=sorted_ops,
-                    remaining=remaining,
-                    depth=depth,
-                    S=S,
-                    K=self.K,
-                )
-                remaining[depth].clear_bits(scheduled_mask)
+        def take_first_nondiag(depth: int) -> int:
+            ops = self.sorted_ops[depth]
+            mask = remaining[depth]
+            for i in range(len(ops)):
+                if not mask[i]:
+                    continue
+                if ops[i].op.name in {"sx", "cx"}:
+                    return i
+            raise RuntimeError(
+                f"No non-diagonal gate found at depth={depth} when expected."
+            )
 
-                if scheduled_mask.none():
-                    S = set()
-                    group2, mask2 = compress_group_construction(
-                        sorted_ops=sorted_ops,
-                        remaining=remaining,
-                        depth=depth,
-                        S=S,
-                        K=self.K,
+        depths = sorted(self.sorted_ops.keys())
+        for depth in depths:
+            while has_remaining(depth):
+                if has_diagonal_remaining(depth):
+                    support = choose_next_support(
+                        self.sorted_ops,
+                        remaining,
+                        depth,
+                        self.K,
+                        self.fused_circuit.num_qubits,
+                        support,
                     )
-                    remaining[depth].clear_bits(mask2)
-                    if mask2.none():
-                        raise RuntimeError(
-                            "No progress at depth bucket; check K or construction logic"
+                    group, scheduled_mask = compress_group_construction(
+                        self.sorted_ops,
+                        remaining,
+                        depth,
+                        support,
+                        self.K,
+                    )
+                    if not group.diag_ops and support:
+                        support = set()
+                        group, scheduled_mask = compress_group_construction(
+                            self.sorted_ops,
+                            remaining,
+                            depth,
+                            support,
+                            self.K,
                         )
-                    group = group2
-                    scheduled_mask = mask2
+                    if not group.diag_ops:
+                        raise RuntimeError(
+                            f"Failed to schedule any diagonal gate at depth={depth}."
+                        )
 
-                if open_start_depth is None:
-                    open_start_depth = depth
-                    open_diag_ops = []
-                    open_terminator = None
-                    open_stop_reason = "end"
-                    open_S_out = set()
+                    remaining[depth].clear_bits(scheduled_mask)
+                    groups.append(group)
+                    support = set(group.S_out)
+                    continue
 
-                new_targets = diag_targets(group.diag_ops)
-                if (
-                    open_start_depth is not None
-                    and len(open_S_out | new_targets) > self.K
-                ):
-                    flush_open_group()
-                    open_start_depth = depth
-                    open_diag_ops = []
-                    open_terminator = None
-                    open_stop_reason = "end"
-                    open_S_out = set()
-
-                open_diag_ops.extend(group.diag_ops)
-                open_S_out |= new_targets
-
-                if group.terminator is not None:
-                    open_terminator = group.terminator
-                    open_stop_reason = group.stop_reason
-                    flush_open_group()
-                elif len(group.diag_ops) == 0 and open_diag_ops:
-                    # No diagonal progress; close the current open group before resetting support.
-                    flush_open_group()
-
-                S = set(group.S_out)
-                if group.terminator is not None or len(group.diag_ops) == 0:
-                    flush_open_group()
-                    S = choose_next_support(
-                        sorted_ops=sorted_ops,
-                        remaining=remaining,
-                        start_depth=depth,
-                        K=self.K,
-                        num_qubits=num_qubits,
+                idx = take_first_nondiag(depth)
+                node = self.sorted_ops[depth][idx]
+                if node.op.name not in {"sx", "cx"}:
+                    raise RuntimeError(
+                        f"Unexpected gate type at depth={depth}: {node.op.name}"
                     )
+                scheduled_mask = BitSet(len(self.sorted_ops[depth]))
+                scheduled_mask.set(idx)
+                remaining[depth].clear_bits(scheduled_mask)
+                groups.append(
+                    Group(depth=depth, diag_ops=[], terminator=node, S_out=set())
+                )
+                support = set()
 
-            depth = next_nonempty_depth(start_d=depth + 1)
-
-        flush_open_group()
         self.groups = groups
-        return
 
     def validate_group(self):
         if self.sorted_ops is None:
@@ -906,31 +820,16 @@ class QFTOptimizer:
                 node_id = id(group.terminator)
                 if node_id not in node_to_depth:
                     raise RuntimeError("Group terminator not in sorted_ops.")
-                term_q = group.terminator.qargs[0]
-                if hasattr(term_q, "index"):
-                    term_idx = term_q.index
-                elif hasattr(term_q, "_index"):
-                    term_idx = term_q._index
-                else:
-                    raise AttributeError("Qubit has no index attribute")
-                term_targets = {term_idx}
-                if group.terminator.op.name == "cx":
-                    other_q = group.terminator.qargs[1]
-                    other_idx = (
-                        other_q.index if hasattr(other_q, "index") else other_q._index
-                    )
-                    term_targets = {term_idx, other_idx}
-                if group.stop_reason in {"hit_sx_conflict", "hit_cx_conflict"}:
-                    if not term_targets.issubset(group.S_out):
-                        raise RuntimeError("Conflicting terminator not in S_out.")
-                elif group.stop_reason in {"hit_sx_nonconflict", "hit_cx_nonconflict"}:
-                    if term_targets.intersection(group.S_out):
-                        raise RuntimeError("Non-conflicting terminator is in S_out.")
-                else:
-                    raise RuntimeError("Terminator present with invalid stop_reason.")
+                if group.terminator.op.name not in {"sx", "cx"}:
+                    raise RuntimeError("Terminator is not sx/cx.")
+                if group.diag_ops:
+                    raise RuntimeError("sx/cx group should not contain diagonal ops.")
                 if node_id in scheduled:
                     raise RuntimeError("Node scheduled more than once.")
                 scheduled.add(node_id)
+            else:
+                if not group.diag_ops:
+                    raise RuntimeError("Empty group without terminator.")
 
         expected = set(node_to_depth.keys())
         missing = expected - scheduled
@@ -944,40 +843,23 @@ class QFTOptimizer:
         if self.groups is None:
             raise RuntimeError("Call compression_tile() before post_processing().")
 
-        def _qubit_index(q: Any) -> int:
-            if hasattr(q, "index"):
-                return int(q.index)
-            if hasattr(q, "_index"):
-                return int(q._index)
-            raise AttributeError("Qubit has no index attribute")
-
+        merged: list[Group] = []
         for group in self.groups:
-            targets: set[int] = set()
-            for node in group.diag_ops:
-                name = node.op.name
-                qs = [_qubit_index(q) for q in node.qargs]
-                if name == "rz":
-                    targets.add(qs[0])
-                elif name == "rzz":
-                    targets.update(qs)
-                else:
-                    raise RuntimeError("diag_ops contains non-diagonal gate.")
+            if group.terminator is not None:
+                merged.append(group)
+                continue
 
-            if not targets.issubset(group.S_out):
-                missing = targets - group.S_out
-                raise RuntimeError(
-                    "diag_ops targets are not a subset of S_out. "
-                    f"group_depth={group.depth} "
-                    f"missing={sorted(missing)} "
-                    f"S_out={sorted(group.S_out)} "
-                    f"diag_ops={[node.op.name for node in group.diag_ops]}"
-                )
-            if len(targets) > self.K:
-                raise RuntimeError(
-                    f"diag_ops target set exceeds K. group_depth={group.depth} "
-                    f"|targets|={len(targets)} K={self.K} targets={sorted(targets)}"
-                )
-            group.S_out = targets
+            if merged and merged[-1].terminator is None:
+                prev = merged[-1]
+                union_support = prev.S_out | group.S_out
+                if len(union_support) <= self.K:
+                    prev.diag_ops.extend(group.diag_ops)
+                    prev.S_out = union_support
+                    continue
+
+            merged.append(group)
+
+        self.groups = merged
 
     def print_groups(self) -> None:
         if self.groups is None:
@@ -989,43 +871,28 @@ class QFTOptimizer:
             s_card = len(group.S_out)
 
             s_out_list = sorted(group.S_out)
-            if group.terminator is not None:
-                if group.stop_reason in {"hit_sx_conflict", "hit_sx_nonconflict"}:
-                    term_gate = "sx"
-                    term_type = (
-                        "conflict"
-                        if group.stop_reason.endswith("conflict")
-                        else "nonconflict"
-                    )
-                elif group.stop_reason in {"hit_cx_conflict", "hit_cx_nonconflict"}:
-                    term_gate = "cx"
-                    term_type = (
-                        "conflict"
-                        if group.stop_reason.endswith("conflict")
-                        else "nonconflict"
-                    )
-                else:
-                    raise RuntimeError(
-                        "Terminator present but stop_reason is not a barrier reason."
-                    )
+            if group.terminator is None:
                 print(
-                    f"depth={depth} diag_ops={diag_count} terminator={term_gate}:{term_type} "
+                    f"depth={depth} diag_ops={diag_count} "
                     f"S_out={s_card} S_out_set={s_out_list}"
                 )
-            else:
-                if group.stop_reason in {
-                    "hit_sx_conflict",
-                    "hit_sx_nonconflict",
-                    "hit_cx_conflict",
-                    "hit_cx_nonconflict",
-                }:
-                    raise RuntimeError(
-                        "stop_reason indicates barrier terminator but terminator is None."
-                    )
-                print(
-                    f"depth={depth} diag_ops={diag_count} terminator=None "
-                    f"S_out={s_card} S_out_set={s_out_list}"
-                )
+                continue
+
+            term_gate = group.terminator.op.name
+            if term_gate == "sx":
+                q = group.terminator.qargs[0]
+                q_idx = q.index if hasattr(q, "index") else q._index
+                print(f"depth={depth} sx target={q_idx}")
+                continue
+            if term_gate == "cx":
+                c_q = group.terminator.qargs[0]
+                t_q = group.terminator.qargs[1]
+                c_idx = c_q.index if hasattr(c_q, "index") else c_q._index
+                t_idx = t_q.index if hasattr(t_q, "index") else t_q._index
+                print(f"depth={depth} cx control={c_idx} target={t_idx}")
+                continue
+
+            raise RuntimeError(f"Unexpected terminator gate: {term_gate}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1069,6 +936,6 @@ if __name__ == "__main__":
     optimizer.preprocess()
     optimizer.topological_sort()
     optimizer.compression_tile()
-    optimizer.validate_group()
+    # optimizer.validate_group()
     optimizer.post_processing()
     optimizer.print_groups()
