@@ -46,6 +46,35 @@ QASMBENCH_BATCH_ROOTS = [
     Path("compressor/QASMBench/small"),
     Path("compressor/QASMBench/medium"),
 ]
+QASMBENCH_BATCH_TARGETS: dict[str, list[str]] = {
+    "small": [
+        "adder_n4",
+        "adder_n10",
+        "bell_n4",
+        "error_correctiond3_n5",
+        "fredkin_n3",
+        "grover_n2",
+        "ising_n10",
+        "simon_n6",
+        "toffoli_n3",
+    ],
+    "medium": [
+        "bigadder_n18",
+        "ising_n26",
+        "knn_n25",
+        "multiplier_n15",
+        "multiplier_n13",
+        "qec9xz_n17",
+        "qram_n20",
+        "sat_n11",
+        "swap_test_n25",
+        "wstate_n27",
+    ],
+}
+QASMBENCH_NAME_ALIASES: dict[str, str] = {
+    # QASMBench uses "multiply_n13", while user-facing naming often says "multiplier_n13".
+    "multiplier_n13": "multiply_n13",
+}
 
 
 def _node_id(node: Any) -> int:
@@ -361,11 +390,27 @@ def cut_phase_blocks_only(
     circuit: zx.Circuit, quiet: bool
 ) -> tuple[list[list[Any]], list[list[Any]], list[Any], int, list[tuple[int, int]]]:
     normalized = circuit.to_basic_gates().split_phase_gates()
-    correction: list[Any] = []
-    qubits = normalized.qubits
+
+    def _is_supported_for_cut(gate: Any) -> bool:
+        if gate.name in ("CNOT", "CZ", "HAD"):
+            return True
+        return isinstance(gate, zx.circuit.gates.ZPhase)
+
+    if all(_is_supported_for_cut(g) for g in normalized.gates):
+        working = normalized
+        correction: list[Any] = []
+    else:
+        # basic_optimization can introduce NOT/SWAP corrections. Separate them
+        # so the remaining circuit is phase-block compatible.
+        optimizer = zx.optimize.Optimizer(normalized)
+        working, correction = optimizer.parse_circuit(
+            separate_correction=True, quiet=True
+        )
+
+    qubits = working.qubits
 
     gates = {i: [] for i in range(qubits)}
-    for idx, gate in enumerate(normalized.gates):
+    for idx, gate in enumerate(working.gates):
         gate_copy = gate.copy()
         gate_copy.index = idx
         if gate_copy.name in ("CNOT", "CZ"):
@@ -526,12 +571,20 @@ def optimize_qasm_with_pyzx(
         heartbeat_sec=heartbeat_sec,
     )
 
-    # Stage 2: run PyZX optimizers that target phase polynomial structure.
+    # Stage 2: run a light PyZX optimization before phase-block processing.
+    zx_imported = run_with_progress(
+        "PyZX import from Qiskit QASM",
+        lambda: zx.Circuit.from_qasm(qasm2_dumps(clifford_t)),
+        heartbeat_sec=heartbeat_sec,
+    )
+    zx_preoptimized = run_with_progress(
+        "PyZX basic_optimization",
+        lambda: zx.optimize.basic_optimization(zx_imported, quiet=True),
+        heartbeat_sec=heartbeat_sec,
+    )
     zx_circuit = run_with_progress(
-        "PyZX parse and normalize",
-        lambda: zx.Circuit.from_qasm(qasm2_dumps(clifford_t))
-        .to_basic_gates()
-        .split_phase_gates(),
+        "PyZX normalize",
+        lambda: zx_preoptimized.to_basic_gates().split_phase_gates(),
         heartbeat_sec=heartbeat_sec,
     )
     if phase_blocks_only:
@@ -553,10 +606,6 @@ def optimize_qasm_with_pyzx(
             f"correction_gates={len(correction)}",
             flush=True,
         )
-        print(
-            "[phase-blocks] analysis-only: keeping normalized circuit unchanged.",
-            flush=True,
-        )
         if phase_report_path is not None:
             write_phase_block_report(
                 report_path=phase_report_path,
@@ -566,7 +615,13 @@ def optimize_qasm_with_pyzx(
                 correction_count=len(correction),
             )
             print(f"[phase-blocks] report written to: {phase_report_path}", flush=True)
-        zx_optimized = zx_circuit
+        zx_optimized = run_with_progress(
+            "PyZX rebuild circuit from phase blocks",
+            lambda: rebuild_from_phase_blocks(
+                blocks, hadamard_layers, correction, _qubits
+            ),
+            heartbeat_sec=heartbeat_sec,
+        )
     else:
         zx_optimized = run_with_progress(
             "PyZX phase_block_optimize",
@@ -650,8 +705,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        required=True,
-        help="Output directory for all artifacts (QASM and circuit drawing).",
+        default=Path("results/pyzx_opt"),
+        help="Output directory for all artifacts (QASM and circuit drawing). Default: results/pyzx_opt",
     )
     parser.add_argument(
         "--qiskit-opt-level",
@@ -706,7 +761,7 @@ def parse_args() -> argparse.Namespace:
         "--qasmbench-batch",
         action="store_true",
         help=(
-            "Process all circuits in compressor/QASMBench/small and /medium, "
+            "Process the curated small/medium QASMBench circuit list, "
             "run transpile + phase-block cutting, and mirror output folder structure."
         ),
     )
@@ -744,8 +799,29 @@ def run_qasmbench_batch(args: argparse.Namespace) -> None:
         if not root.exists():
             print(f"[batch-skip] missing root: {root}", flush=True)
             continue
-        for subdir in sorted(p for p in root.iterdir() if p.is_dir()):
+        root_key = root.name
+        targets = QASMBENCH_BATCH_TARGETS.get(root_key, [])
+        if not targets:
+            print(f"[batch-skip] no targets configured for root: {root}", flush=True)
+            continue
+
+        for target_name in targets:
             total += 1
+            subdir = root / target_name
+            if not subdir.exists():
+                alias = QASMBENCH_NAME_ALIASES.get(target_name)
+                if alias is not None:
+                    alias_path = root / alias
+                    if alias_path.exists():
+                        subdir = alias_path
+                if not subdir.exists():
+                    print(
+                        f"[batch-skip] {root_key}/{target_name}: folder not found",
+                        flush=True,
+                    )
+                    skipped += 1
+                    continue
+
             circuit_name = subdir.name
             input_qasm = find_qasmbench_input(subdir)
             if input_qasm is None:
