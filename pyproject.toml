@@ -27,9 +27,6 @@ classifiers = [
     "Topic :: Communications :: Email"
 ]
 
-[tool.setuptools.dynamic]
-version = {attr = "qulacs._version.__version__"}
-
 [tool.setuptools_scm]
 write_to = "pysrc/qulacs/_version.py"
 
@@ -76,6 +73,7 @@ doc = [
 ]
 
 [tool.setuptools]
+package-dir = {"" = "pysrc"}
 include-package-data = true
 zip-safe = false
 

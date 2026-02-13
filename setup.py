@@ -65,6 +65,9 @@ class CMakeBuild(build_ext):
         if os.getenv("USE_MPI"):
             cmake_args += ["-DUSE_MPI:STR=" + os.getenv("USE_MPI")]
 
+        if os.getenv("USE_QUANT"):
+            cmake_args += ["-DUSE_QUANT:STR=" + os.getenv("USE_QUANT")]
+
         env = os.environ.copy()
         env["CXXFLAGS"] = '{} -DVERSION_INFO=\\"{}\\"'.format(
             env.get("CXXFLAGS", ""), self.distribution.get_version()

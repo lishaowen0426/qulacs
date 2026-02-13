@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     int ret = 0;
     try {
         // ret = run_comp_on_mpi(argc, argv);
-        ret = benchmark_blaz(argc, argv);
+        ret = benchmark_quantization(argc, argv);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         ret = 1;

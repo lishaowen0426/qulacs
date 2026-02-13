@@ -40,3 +40,4 @@ void compression_on_h_mpi(QuantumCircuit *circuit, QuantumStateBase *input,
 
 int run_comp_on_mpi(int argc, char **argv);
 int benchmark_blaz(int argc, char **argv);
+int benchmark_quantization(int argc, char **argv);

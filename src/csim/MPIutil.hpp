@@ -30,6 +30,11 @@ private:
     double compress_overhead_time_sum = 0.0;
     double compress_ratio_sum = 0.0;
     uint64_t compress_ratio_count = 0;
+    uint64_t bytes_exchanged_no_quant = 0;
+    uint64_t bytes_exchanged_quant = 0;
+#ifdef _USE_QUANT
+    bool quant_comm_enabled = false;
+#endif
 
     static void MPIFunctionError(
         const std::string &func, UINT ret, const std::string &file, UINT line);
@@ -75,6 +80,16 @@ public:
         int pair_rank, int errBoundMode, double absErrBound,
         double relBoundRatio, double pwrBoundRatio);
     void m_DC_isendrecv(void *sendbuf, void *recvbuf, int count, int pair_rank);
+    void set_quant_comm_enabled(bool enabled);
+    bool is_quant_comm_enabled() const;
+    uint64_t get_bytes_exchanged_no_quant() const {
+        return bytes_exchanged_no_quant;
+    }
+    uint64_t get_bytes_exchanged_quant() const { return bytes_exchanged_quant; }
+    void reset_bytes_exchanged_counters() {
+        bytes_exchanged_no_quant = 0;
+        bytes_exchanged_quant = 0;
+    }
     void m_I_allreduce(void *buf, UINT count);
     void s_D_allgather(double a, void *recvbuf);
     void s_D_allreduce(void *buf);

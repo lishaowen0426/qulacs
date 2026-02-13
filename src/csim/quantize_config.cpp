@@ -1,7 +1,7 @@
 #include "quantize_config.hpp"
 
 namespace {
-double global_quantize_error_bound = 1e-6;
+double global_quantize_error_bound = 1e-4;
 }
 
 double get_quantize_error_bound() { return global_quantize_error_bound; }

@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <random>
 #include <stdexcept>
@@ -25,6 +26,8 @@
 #include "blaz/blaz.hpp"
 #include "cppsim/circuit.hpp"
 #include "cppsim/gate_factory.hpp"
+#include "cppsim/qasm_loader.hpp"
+#include "cppsim/state_quantize.hpp"
 #include "csim/MPIutil.hpp"
 #include "spdlog/spdlog.h"
 
@@ -288,11 +291,16 @@ double tvd_prob(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
     return static_cast<double>(0.5L * sum);
 }
 
-double fidelity(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
+CTYPE inner_product(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
     CTYPE inner = 0.0;
     for (std::size_t i = 0; i < a.size(); ++i) {
         inner += std::conj(a[i]) * b[i];
     }
+    return inner;
+}
+
+double fidelity(const std::vector<CTYPE> &a, const std::vector<CTYPE> &b) {
+    const CTYPE inner = inner_product(a, b);
     const double mag = std::abs(inner);
     return mag * mag;
 }
@@ -337,7 +345,8 @@ std::vector<CTYPE> make_high_freq(std::size_t dim) {
     for (std::size_t i = 0; i < dim; ++i) {
         const double x = two_pi * freq * static_cast<double>(i) / dim;
         const double mag =
-            1.0 + 0.5 * std::sin(two_pi * static_cast<double>(i) / (dim / 16.0));
+            1.0 +
+            0.5 * std::sin(two_pi * static_cast<double>(i) / (dim / 16.0));
         v[i] = CTYPE(mag * std::sin(x), mag * std::cos(x));
     }
     return normalize_state(std::move(v));
@@ -354,6 +363,7 @@ std::vector<CTYPE> make_sparse(std::size_t dim, std::mt19937 &rng) {
     }
     return normalize_state(std::move(v));
 }
+
 }  // namespace
 
 int benchmark_blaz(int argc, char **argv) {
@@ -409,6 +419,113 @@ int benchmark_blaz(int argc, char **argv) {
                           << fid << "\n";
             }
         }
+    }
+    return 0;
+}
+
+int benchmark_quantization(int argc, char **argv) {
+    if (argc < 2) {
+        throw std::runtime_error("usage: <program> <qasm_path> [error_bound]");
+    }
+    const std::string qasm_path = argv[1];
+
+    if (argc >= 3) {
+        const double error_bound = std::stod(argv[2]);
+        QuantumStateCpuQuant::set_error_bound(error_bound);
+    }
+
+    std::unique_ptr<QuantumCircuit> circuit = load_qasm_file(qasm_path);
+    if (!circuit) {
+        throw std::runtime_error("failed to load qasm circuit");
+    }
+
+    MPIutil &mpiutil = MPIutil::get_inst();
+    int rank = 0;
+    int size = 1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    const UINT qubit_count = circuit->qubit_count;
+    QuantumState normal_state(qubit_count, true);
+    normal_state.set_computational_basis(0);
+    mpiutil.set_quant_comm_enabled(false);
+    mpiutil.reset_bytes_exchanged_counters();
+    for (auto *gate : circuit->gate_list) {
+        gate->update_quantum_state(&normal_state);
+    }
+    const uint64_t local_bytes_no_quant_run =
+        mpiutil.get_bytes_exchanged_no_quant();
+    std::vector<CTYPE> normal_output(static_cast<size_t>(normal_state.dim));
+    std::copy_n(
+        normal_state.data_cpp(), static_cast<size_t>(normal_state.dim), normal_output.data());
+
+    QuantumStateCpuQuant quant_state(qubit_count, true);
+    quant_state.set_computational_basis(0);
+    mpiutil.set_quant_comm_enabled(true);
+    mpiutil.reset_bytes_exchanged_counters();
+    for (auto *gate : circuit->gate_list) {
+        gate->update_quantum_state(&quant_state);
+        quant_state.quantize();
+    }
+    const uint64_t local_bytes_quant_run = mpiutil.get_bytes_exchanged_quant();
+    std::vector<CTYPE> quant_output(static_cast<size_t>(quant_state.dim));
+    std::copy_n(
+        quant_state.data_cpp(), static_cast<size_t>(quant_state.dim), quant_output.data());
+
+    // Reset default back to non-quantized communication.
+    mpiutil.set_quant_comm_enabled(false);
+
+    const double local_tvd = tvd_prob(normal_output, quant_output);
+    const CTYPE local_inner = inner_product(normal_output, quant_output);
+    const double local_inner_re = std::real(local_inner);
+    const double local_inner_im = std::imag(local_inner);
+
+    double local_l2_sq = 0.0;
+    double local_max_abs = 0.0;
+    for (size_t i = 0; i < normal_output.size(); ++i) {
+        const CTYPE diff = normal_output[i] - quant_output[i];
+        const double abs_diff = std::abs(diff);
+        local_l2_sq += abs_diff * abs_diff;
+        if (abs_diff > local_max_abs) {
+            local_max_abs = abs_diff;
+        }
+    }
+
+    double global_l2_sq = 0.0;
+    double global_max_abs = 0.0;
+    double global_tvd = 0.0;
+    double global_inner_re = 0.0;
+    double global_inner_im = 0.0;
+    uint64_t global_bytes_no_quant_run = 0;
+    uint64_t global_bytes_quant_run = 0;
+    MPI_Reduce(
+        &local_l2_sq, &global_l2_sq, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(
+        &local_max_abs, &global_max_abs, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_tvd, &global_tvd, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(
+        &local_inner_re, &global_inner_re, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(
+        &local_inner_im, &global_inner_im, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_bytes_no_quant_run, &global_bytes_no_quant_run, 1,
+        MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_bytes_quant_run, &global_bytes_quant_run, 1,
+        MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        const double global_fidelity = global_inner_re * global_inner_re +
+                                       global_inner_im * global_inner_im;
+        const std::string qasm_name =
+            std::filesystem::path(qasm_path).filename().string();
+        std::cout << std::setprecision(17) << "qasm=" << qasm_name
+                  << " ranks=" << size << " qubits=" << qubit_count
+                  << " gates=" << circuit->gate_list.size()
+                  << " error_bound=" << QuantumStateCpuQuant::get_error_bound()
+                  << " l2=" << std::sqrt(global_l2_sq)
+                  << " max_abs=" << global_max_abs << " tvd=" << global_tvd
+                  << " fidelity=" << global_fidelity
+                  << " bytes_no_quant=" << global_bytes_no_quant_run
+                  << " bytes_quant=" << global_bytes_quant_run << "\n";
     }
     return 0;
 }

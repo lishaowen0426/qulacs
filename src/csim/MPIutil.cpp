@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 #include "SZ3c/sz3c.h"
@@ -16,21 +17,65 @@
 
 #ifdef _USE_QUANT
 namespace {
+using QuantCommInt = int16_t;
+
+inline MPI_Datatype quant_comm_mpi_datatype() {
+    if (std::is_same<QuantCommInt, int16_t>::value) return MPI_INT16_T;
+    if (std::is_same<QuantCommInt, int32_t>::value) return MPI_INT32_T;
+    if (std::is_same<QuantCommInt, int64_t>::value) return MPI_INT64_T;
+    throw MPIRuntimeException(
+        "quant_comm_mpi_datatype: unsupported QuantCommInt type");
+}
+
 inline size_t quantized_int_count_from_complex_count(int complex_count) {
     return static_cast<size_t>(complex_count) * 2;
 }
 
 inline size_t quantized_byte_count_from_complex_count(int complex_count) {
     return quantized_int_count_from_complex_count(complex_count) *
-           sizeof(int32_t);
+           sizeof(QuantCommInt);
 }
 
-inline int32_t quant_clamp_to_i32(long long value) {
-    const long long hi = static_cast<long long>(std::numeric_limits<int32_t>::max());
-    const long long lo = static_cast<long long>(std::numeric_limits<int32_t>::min());
-    if (value > hi) return std::numeric_limits<int32_t>::max();
-    if (value < lo) return std::numeric_limits<int32_t>::min();
-    return static_cast<int32_t>(value);
+inline int quantized_mpi_count_from_complex_count(int complex_count) {
+    const size_t quant_count =
+        quantized_int_count_from_complex_count(complex_count);
+    if (quant_count >
+        static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw MPIRuntimeException(
+            "quantized_mpi_count_from_complex_count: buffer size exceeds "
+            "MPI int count range");
+    }
+    return static_cast<int>(quant_count);
+}
+
+std::vector<QuantCommInt> async_packed_send_ring[_MAX_REQUESTS];
+std::vector<QuantCommInt> async_packed_recv_ring[_MAX_REQUESTS];
+CTYPE* async_recv_dst_ring[_MAX_REQUESTS] = {nullptr};
+int async_recv_complex_count_ring[_MAX_REQUESTS] = {0};
+bool async_recv_pending_ring[_MAX_REQUESTS] = {false};
+
+inline void validate_quant_step_for_comm_type(double quant_step) {
+    const double min_step = 1.0 /
+                            static_cast<double>(
+                                std::numeric_limits<QuantCommInt>::max());
+    if (quant_step < min_step) {
+        throw MPIRuntimeException(
+            "pack_snapped_complex_to_int_pairs: quantization step is too "
+            "small for QuantCommInt range");
+    }
+}
+
+inline QuantCommInt quant_cast_checked(long long value) {
+    const long long hi =
+        static_cast<long long>(std::numeric_limits<QuantCommInt>::max());
+    const long long lo =
+        static_cast<long long>(std::numeric_limits<QuantCommInt>::lowest());
+    if (value > hi || value < lo) {
+        throw MPIRuntimeException(
+            "pack_snapped_complex_to_int_pairs: quantized value overflows "
+            "QuantCommInt");
+    }
+    return static_cast<QuantCommInt>(value);
 }
 
 #ifndef NDEBUG
@@ -55,14 +100,14 @@ void validate_snapped_complex_buffer(
 #if defined(__GNUC__)
 __attribute__((unused))
 #endif
-std::vector<int32_t> pack_snapped_complex_to_int_pairs(
+std::vector<QuantCommInt> pack_snapped_complex_to_int_pairs(
     const CTYPE* src, int complex_count) {
     if (complex_count < 0) {
         throw MPIRuntimeException(
             "pack_snapped_complex_to_int_pairs: complex_count must be "
             "non-negative");
     }
-    std::vector<int32_t> out(
+    std::vector<QuantCommInt> out(
         quantized_int_count_from_complex_count(complex_count));
     if (complex_count == 0) return out;
 
@@ -72,6 +117,7 @@ std::vector<int32_t> pack_snapped_complex_to_int_pairs(
             "pack_snapped_complex_to_int_pairs: quantization error bound must "
             "be positive");
     }
+    validate_quant_step_for_comm_type(quant_step);
 #ifndef NDEBUG
     validate_snapped_complex_buffer(src, complex_count, quant_step);
 #endif
@@ -81,8 +127,8 @@ std::vector<int32_t> pack_snapped_complex_to_int_pairs(
         const double im = std::imag(src[i]);
         const long long qre = llround(re / quant_step);
         const long long qim = llround(im / quant_step);
-        out[2 * i] = quant_clamp_to_i32(qre);
-        out[2 * i + 1] = quant_clamp_to_i32(qim);
+        out[2 * i] = quant_cast_checked(qre);
+        out[2 * i + 1] = quant_cast_checked(qim);
     }
     return out;
 }
@@ -91,7 +137,7 @@ std::vector<int32_t> pack_snapped_complex_to_int_pairs(
 __attribute__((unused))
 #endif
 void unpack_int_pairs_to_snapped_complex(
-    const int32_t* quantized, int complex_count, CTYPE* dst) {
+    const QuantCommInt* quantized, int complex_count, CTYPE* dst) {
     if (complex_count < 0) {
         throw MPIRuntimeException(
             "unpack_int_pairs_to_snapped_complex: complex_count must be "
@@ -113,6 +159,16 @@ void unpack_int_pairs_to_snapped_complex(
 }
 }  // namespace
 #endif
+
+namespace {
+inline uint64_t payload_bytes_from_count(int count, size_t elem_size) {
+    if (count < 0) {
+        throw MPIRuntimeException(
+            "payload_bytes_from_count: count must be non-negative");
+    }
+    return static_cast<uint64_t>(count) * static_cast<uint64_t>(elem_size);
+}
+}  // namespace
 
 void MPIutil::MPIFunctionError(
     const std::string &func, UINT ret, const std::string &file, UINT line) {
@@ -160,6 +216,16 @@ void MPIutil::mpi_wait(UINT count) {
         UINT ret = MPI_Wait(&(mpireq[idx]), &mpistat);
         if (ret != MPI_SUCCESS)
             MPIFunctionError("MPI_Wait", ret, __FILE__, __LINE__);
+#ifdef _USE_QUANT
+        if (async_recv_pending_ring[idx]) {
+            unpack_int_pairs_to_snapped_complex(
+                async_packed_recv_ring[idx].data(),
+                async_recv_complex_count_ring[idx], async_recv_dst_ring[idx]);
+            async_recv_pending_ring[idx] = false;
+            async_recv_dst_ring[idx] = nullptr;
+            async_recv_complex_count_ring[idx] = 0;
+        }
+#endif
         mpireq_cnt--;
     }
 }
@@ -208,6 +274,27 @@ void MPIutil::barrier() {
         MPIFunctionError("MPI_Barrier", ret, __FILE__, __LINE__);
 }
 
+void MPIutil::set_quant_comm_enabled(bool enabled) {
+#ifdef _USE_QUANT
+    if (mpireq_cnt != 0) {
+        throw MPIRuntimeException(
+            "set_quant_comm_enabled: cannot switch mode while async MPI "
+            "requests are in flight");
+    }
+    quant_comm_enabled = enabled;
+#else
+    (void)enabled;
+#endif
+}
+
+bool MPIutil::is_quant_comm_enabled() const {
+#ifdef _USE_QUANT
+    return quant_comm_enabled;
+#else
+    return false;
+#endif
+}
+
 void MPIutil::m_DC_send(void *sendbuf, int count, int pair_rank) {
     int tag0 = get_tag();
     UINT ret = MPI_Send(
@@ -229,11 +316,40 @@ void MPIutil::m_DC_sendrecv(
     int tag0 = get_tag();
     int mpi_tag1 = tag0 + ((mpirank & pair_rank) << 1) + (mpirank > pair_rank);
     int mpi_tag2 = mpi_tag1 ^ 1;
+#ifdef _USE_QUANT
+    if (quant_comm_enabled) {
+        const int quant_count = quantized_mpi_count_from_complex_count(count);
+        std::vector<QuantCommInt> send_packed = pack_snapped_complex_to_int_pairs(
+            reinterpret_cast<const CTYPE*>(sendbuf), count);
+        std::vector<QuantCommInt> recv_packed(
+            quantized_int_count_from_complex_count(count));
+
+        UINT ret = MPI_Sendrecv(send_packed.data(), quant_count,
+            quant_comm_mpi_datatype(), pair_rank, mpi_tag1, recv_packed.data(),
+            quant_count, quant_comm_mpi_datatype(), pair_rank, mpi_tag2,
+            mpicomm, &mpistat);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Sendrecv", ret, __FILE__, __LINE__);
+        unpack_int_pairs_to_snapped_complex(
+            recv_packed.data(), count, reinterpret_cast<CTYPE*>(recvbuf));
+        bytes_exchanged_quant +=
+            payload_bytes_from_count(quant_count, sizeof(QuantCommInt));
+    } else {
+        UINT ret = MPI_Sendrecv(sendbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
+            mpi_tag1, recvbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
+            mpi_tag2, mpicomm, &mpistat);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Sendrecv", ret, __FILE__, __LINE__);
+        bytes_exchanged_no_quant +=
+            payload_bytes_from_count(count, sizeof(CTYPE));
+    }
+#else
     UINT ret = MPI_Sendrecv(sendbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
         mpi_tag1, recvbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank, mpi_tag2,
         mpicomm, &mpistat);
     if (ret != MPI_SUCCESS)
         MPIFunctionError("MPI_Sendrecv", ret, __FILE__, __LINE__);
+#endif
 }
 
 void MPIutil::m_DC_sendrecv_compressed(void *sendbuf, void *recvbuf, int count,
@@ -309,6 +425,47 @@ void MPIutil::m_DC_isendrecv(
     MPI_Request *send_request = get_request();
     MPI_Request *recv_request = get_request();
 
+#ifdef _USE_QUANT
+    const UINT send_idx = (_MAX_REQUESTS + mpireq_idx - 1) % _MAX_REQUESTS;
+    const UINT recv_idx = (_MAX_REQUESTS + mpireq_idx - 1) % _MAX_REQUESTS;
+    if (quant_comm_enabled) {
+        const int quant_count = quantized_mpi_count_from_complex_count(count);
+        async_packed_send_ring[send_idx] = pack_snapped_complex_to_int_pairs(
+            reinterpret_cast<const CTYPE*>(sendbuf), count);
+        async_packed_recv_ring[recv_idx].resize(
+            quantized_int_count_from_complex_count(count));
+        async_recv_dst_ring[recv_idx] = reinterpret_cast<CTYPE*>(recvbuf);
+        async_recv_complex_count_ring[recv_idx] = count;
+        async_recv_pending_ring[recv_idx] = true;
+
+        UINT ret = MPI_Isend(async_packed_send_ring[send_idx].data(),
+            quant_count, quant_comm_mpi_datatype(), pair_rank, mpi_tag1,
+            mpicomm, send_request);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Isend", ret, __FILE__, __LINE__);
+        ret = MPI_Irecv(async_packed_recv_ring[recv_idx].data(), quant_count,
+            quant_comm_mpi_datatype(), pair_rank, mpi_tag2, mpicomm,
+            recv_request);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Irecv", ret, __FILE__, __LINE__);
+        bytes_exchanged_quant +=
+            payload_bytes_from_count(quant_count, sizeof(QuantCommInt));
+    } else {
+        async_recv_pending_ring[recv_idx] = false;
+        async_recv_dst_ring[recv_idx] = nullptr;
+        async_recv_complex_count_ring[recv_idx] = 0;
+        UINT ret = MPI_Isend(sendbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
+            mpi_tag1, mpicomm, send_request);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Isend", ret, __FILE__, __LINE__);
+        ret = MPI_Irecv(recvbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
+            mpi_tag2, mpicomm, recv_request);
+        if (ret != MPI_SUCCESS)
+            MPIFunctionError("MPI_Irecv", ret, __FILE__, __LINE__);
+        bytes_exchanged_no_quant +=
+            payload_bytes_from_count(count, sizeof(CTYPE));
+    }
+#else
     UINT ret = MPI_Isend(sendbuf, count, MPI_CXX_DOUBLE_COMPLEX, pair_rank,
         mpi_tag1, mpicomm, send_request);
     if (ret != MPI_SUCCESS)
@@ -317,6 +474,7 @@ void MPIutil::m_DC_isendrecv(
         mpicomm, recv_request);
     if (ret != MPI_SUCCESS)
         MPIFunctionError("MPI_Irecv", ret, __FILE__, __LINE__);
+#endif
 }
 
 void MPIutil::m_DC_allgather(void *sendbuf, void *recvbuf, int count) {
