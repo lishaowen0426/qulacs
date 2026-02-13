@@ -2,14 +2,117 @@
 #ifdef _USE_MPI
 #include "MPIutil.hpp"
 
+#include <cmath>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "SZ3c/sz3c.h"
+#include "quantize_config.hpp"
 #include "utility.hpp"
+
+#ifdef _USE_QUANT
+namespace {
+inline size_t quantized_int_count_from_complex_count(int complex_count) {
+    return static_cast<size_t>(complex_count) * 2;
+}
+
+inline size_t quantized_byte_count_from_complex_count(int complex_count) {
+    return quantized_int_count_from_complex_count(complex_count) *
+           sizeof(int32_t);
+}
+
+inline int32_t quant_clamp_to_i32(long long value) {
+    const long long hi = static_cast<long long>(std::numeric_limits<int32_t>::max());
+    const long long lo = static_cast<long long>(std::numeric_limits<int32_t>::min());
+    if (value > hi) return std::numeric_limits<int32_t>::max();
+    if (value < lo) return std::numeric_limits<int32_t>::min();
+    return static_cast<int32_t>(value);
+}
+
+#ifndef NDEBUG
+void validate_snapped_complex_buffer(
+    const CTYPE* src, int complex_count, double step) {
+    const double tolerance = step * 1e-6;
+    for (int i = 0; i < complex_count; ++i) {
+        const double re = std::real(src[i]);
+        const double im = std::imag(src[i]);
+        const double qre = std::round(re / step);
+        const double qim = std::round(im / step);
+        if (std::abs(re - qre * step) > tolerance ||
+            std::abs(im - qim * step) > tolerance) {
+            throw MPIRuntimeException(
+                "pack_snapped_complex_to_int_pairs: input is not snapped to the "
+                "current quantization grid");
+        }
+    }
+}
+#endif
+
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
+std::vector<int32_t> pack_snapped_complex_to_int_pairs(
+    const CTYPE* src, int complex_count) {
+    if (complex_count < 0) {
+        throw MPIRuntimeException(
+            "pack_snapped_complex_to_int_pairs: complex_count must be "
+            "non-negative");
+    }
+    std::vector<int32_t> out(
+        quantized_int_count_from_complex_count(complex_count));
+    if (complex_count == 0) return out;
+
+    const double quant_step = get_quantize_step();
+    if (quant_step <= 0.0) {
+        throw MPIRuntimeException(
+            "pack_snapped_complex_to_int_pairs: quantization error bound must "
+            "be positive");
+    }
+#ifndef NDEBUG
+    validate_snapped_complex_buffer(src, complex_count, quant_step);
+#endif
+
+    for (int i = 0; i < complex_count; ++i) {
+        const double re = std::real(src[i]);
+        const double im = std::imag(src[i]);
+        const long long qre = llround(re / quant_step);
+        const long long qim = llround(im / quant_step);
+        out[2 * i] = quant_clamp_to_i32(qre);
+        out[2 * i + 1] = quant_clamp_to_i32(qim);
+    }
+    return out;
+}
+
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
+void unpack_int_pairs_to_snapped_complex(
+    const int32_t* quantized, int complex_count, CTYPE* dst) {
+    if (complex_count < 0) {
+        throw MPIRuntimeException(
+            "unpack_int_pairs_to_snapped_complex: complex_count must be "
+            "non-negative");
+    }
+    const double quant_step = get_quantize_step();
+    if (quant_step <= 0.0) {
+        throw MPIRuntimeException(
+            "unpack_int_pairs_to_snapped_complex: quantization error bound "
+            "must be positive");
+    }
+
+    for (int i = 0; i < complex_count; ++i) {
+        const double re = static_cast<double>(quantized[2 * i]) * quant_step;
+        const double im =
+            static_cast<double>(quantized[2 * i + 1]) * quant_step;
+        dst[i] = CTYPE(re, im);
+    }
+}
+}  // namespace
+#endif
 
 void MPIutil::MPIFunctionError(
     const std::string &func, UINT ret, const std::string &file, UINT line) {

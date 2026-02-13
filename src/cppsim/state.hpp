@@ -417,8 +417,10 @@ public:
 };
 
 class QuantumStateCpu : public QuantumStateBase {
-private:
+protected:
     CPPCTYPE* _state_vector;
+
+private:
     Random random;
 
 public:

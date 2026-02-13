@@ -21,6 +21,7 @@ message(STATUS "CMAKE_CXX_COMPILER_VERSION = ${CMAKE_CXX_COMPILER_VERSION}")
 set(DEFAULT_USE_OMP Yes)
 set(DEFAULT_USE_MPI No)
 set(DEFAULT_USE_GPU No)
+set(DEFAULT_USE_QUANT No)
 set(DEFAULT_USE_PYTHON Yes)
 set(DEFAULT_USE_TEST No)
 set(DEFAULT_COVERAGE No)
@@ -110,6 +111,9 @@ endif()
 if(NOT DEFINED USE_GPU)
 	set(USE_GPU ${DEFAULT_USE_GPU})
 endif()
+if(NOT DEFINED USE_QUANT)
+	set(USE_QUANT ${DEFAULT_USE_QUANT})
+endif()
 if(NOT DEFINED USE_PYTHON)
 	set(USE_PYTHON ${DEFAULT_USE_PYTHON})
 endif()
@@ -125,6 +129,7 @@ message(STATUS "USE_SIMD = ${USE_SIMD}")
 message(STATUS "USE_OMP = ${USE_OMP}")
 message(STATUS "USE_MPI = ${USE_MPI}")
 message(STATUS "USE_GPU = ${USE_GPU}")
+message(STATUS "USE_QUANT = ${USE_QUANT}")
 message(STATUS "USE_TEST = ${USE_TEST}")
 message(STATUS "COVERAGE = ${COVERAGE}")
 message(STATUS "USE_PYTHON = ${USE_PYTHON}")
@@ -311,6 +316,11 @@ if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQ
 		add_compile_definitions(_USE_MPI)
 	endif()
 
+	# Enable quantized state support
+	if(USE_QUANT)
+		add_compile_definitions(_USE_QUANT)
+	endif()
+
 	# Enable gpu
 	if(USE_GPU)
 		add_compile_options("-D _USE_GPU")
@@ -392,6 +402,11 @@ elseif(MSVC)
 	# enable mpi
 	if(USE_MPI)
 		message(FATAL_ERROR, "USE_MPI is not supported in MSVC environment.")
+	endif()
+
+	# enable quantized state support
+	if(USE_QUANT)
+		add_compile_definitions(_USE_QUANT)
 	endif()
 
 	# enable gpu
