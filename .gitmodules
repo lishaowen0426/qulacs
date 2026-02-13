@@ -10,3 +10,4 @@
 [submodule "compressor/TOpt"]
 	path = compressor/TOpt
 	url = git@github.com:Luke-Heyfron/TOpt.git
+	ignore = untracked

@@ -308,7 +308,7 @@ if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQ
 			(NOT "${CMAKE_CXX_COMPILER}" MATCHES ".*mpic\\+\\+"))
 			message(FATAL_ERROR, "USE_MPI must be used in mpicc/mpic++.")
 		endif()
-		add_compile_options("-D _USE_MPI -lmpi")
+		add_compile_definitions(_USE_MPI)
 	endif()
 
 	# Enable gpu
