@@ -479,10 +479,14 @@ int benchmark_quantization(int argc, char **argv) {
     const CTYPE local_inner = inner_product(normal_output, quant_output);
     const double local_inner_re = std::real(local_inner);
     const double local_inner_im = std::imag(local_inner);
+    double local_norm_normal_sq = 0.0;
+    double local_norm_quant_sq = 0.0;
 
     double local_l2_sq = 0.0;
     double local_max_abs = 0.0;
     for (size_t i = 0; i < normal_output.size(); ++i) {
+        local_norm_normal_sq += std::norm(normal_output[i]);
+        local_norm_quant_sq += std::norm(quant_output[i]);
         const CTYPE diff = normal_output[i] - quant_output[i];
         const double abs_diff = std::abs(diff);
         local_l2_sq += abs_diff * abs_diff;
@@ -496,6 +500,8 @@ int benchmark_quantization(int argc, char **argv) {
     double global_tvd = 0.0;
     double global_inner_re = 0.0;
     double global_inner_im = 0.0;
+    double global_norm_normal_sq = 0.0;
+    double global_norm_quant_sq = 0.0;
     uint64_t global_bytes_no_quant_run = 0;
     uint64_t global_bytes_quant_run = 0;
     MPI_Reduce(
@@ -507,14 +513,21 @@ int benchmark_quantization(int argc, char **argv) {
         &local_inner_re, &global_inner_re, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(
         &local_inner_im, &global_inner_im, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_norm_normal_sq, &global_norm_normal_sq, 1, MPI_DOUBLE,
+        MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_norm_quant_sq, &global_norm_quant_sq, 1, MPI_DOUBLE,
+        MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_bytes_no_quant_run, &global_bytes_no_quant_run, 1,
         MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_bytes_quant_run, &global_bytes_quant_run, 1,
         MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        const double global_fidelity = global_inner_re * global_inner_re +
-                                       global_inner_im * global_inner_im;
+        const double numerator = global_inner_re * global_inner_re +
+                                 global_inner_im * global_inner_im;
+        const double denominator = global_norm_normal_sq * global_norm_quant_sq;
+        const double global_fidelity =
+            (denominator > 0.0) ? (numerator / denominator) : 0.0;
         const std::string qasm_name =
             std::filesystem::path(qasm_path).filename().string();
         std::cout << std::setprecision(17) << "qasm=" << qasm_name
