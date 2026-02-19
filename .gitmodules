@@ -11,3 +11,15 @@
 	path = compressor/TOpt
 	url = git@github.com:Luke-Heyfron/TOpt.git
 	ignore = untracked
+[submodule "compressor/zfp"]
+	path = compressor/zfp
+	url = https://github.com/llnl/zfp.git
+[submodule "compressor/MGARD"]
+	path = compressor/MGARD
+	url = https://github.com/CODARcode/MGARD.git
+[submodule "compressor/SPERR"]
+	path = compressor/SPERR
+	url = https://github.com/NCAR/SPERR.git
+[submodule "compressor/fpzip"]
+	path = compressor/fpzip
+	url = https://github.com/llnl/fpzip.git

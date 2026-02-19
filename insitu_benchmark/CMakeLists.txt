@@ -14,6 +14,9 @@ set(COMPRESSOR_INCLUDE_DIR "${COMPRESSOR_PREFIX}/include")
 set(COMPRESSOR_LIB_DIRS
     "${COMPRESSOR_PREFIX}/lib"
     "${COMPRESSOR_PREFIX}/lib64"
+    "${CMAKE_SOURCE_DIR}/compressor/lib"
+    "${CMAKE_SOURCE_DIR}/compressor/fpzip/build/lib"
+    "${CMAKE_SOURCE_DIR}/compressor/SPERR/build/src"
 )
 set(COMPRESSOR_LIBS "")
 foreach(lib_dir IN LISTS COMPRESSOR_LIB_DIRS)
@@ -32,6 +35,26 @@ find_library(ZSTD_LIB
     PATHS ${COMPRESSOR_LIB_DIRS}
     NO_DEFAULT_PATH
 )
+find_library(ZFP_LIB
+    NAMES zfp
+    PATHS ${COMPRESSOR_LIB_DIRS}
+    NO_DEFAULT_PATH
+)
+find_library(MGARD_LIB
+    NAMES mgard
+    PATHS ${COMPRESSOR_LIB_DIRS}
+    NO_DEFAULT_PATH
+)
+find_library(SPERR_LIB
+    NAMES SPERR sperr
+    PATHS ${COMPRESSOR_LIB_DIRS}
+    NO_DEFAULT_PATH
+)
+find_library(FPZIP_LIB
+    NAMES fpzip
+    PATHS ${COMPRESSOR_LIB_DIRS}
+    NO_DEFAULT_PATH
+)
 if (NOT ZSTD_LIB)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(ZSTD REQUIRED libzstd)
@@ -46,9 +69,24 @@ if (ZSTD_LIB)
         target_link_directories(insitu_benchmark PRIVATE ${ZSTD_LIBRARY_DIRS})
     endif()
 endif()
+if (ZFP_LIB)
+    target_link_libraries(insitu_benchmark PRIVATE ${ZFP_LIB})
+endif()
+if (MGARD_LIB)
+    target_link_libraries(insitu_benchmark PRIVATE ${MGARD_LIB})
+endif()
+if (SPERR_LIB)
+    target_link_libraries(insitu_benchmark PRIVATE ${SPERR_LIB})
+endif()
+if (FPZIP_LIB)
+    target_link_libraries(insitu_benchmark PRIVATE ${FPZIP_LIB})
+endif()
 target_include_directories(insitu_benchmark PRIVATE
     ${CMAKE_SOURCE_DIR}/src/blaz
     ${CMAKE_SOURCE_DIR}/src/cppsim
     ${CMAKE_SOURCE_DIR}/src/csim
     ${COMPRESSOR_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/compressor/fpzip/include
+    ${CMAKE_SOURCE_DIR}/compressor/SPERR/include
+    ${CMAKE_SOURCE_DIR}/compressor/SPERR/build
 )
