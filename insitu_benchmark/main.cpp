@@ -33,7 +33,7 @@ std::string make_log_filename(const char *argv0) {
 }  // namespace
 
 int main(int argc, char **argv) {
-    MPI_Init(&argc, &argv);
+    // MPI_Init(&argc, &argv);
 
     /*
     auto logger =
@@ -51,6 +51,6 @@ int main(int argc, char **argv) {
         ret = 1;
     }
 
-    MPI_Finalize();
+    // MPI_Finalize();
     return ret;
 }
