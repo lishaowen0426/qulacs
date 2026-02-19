@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +25,7 @@
 #else
 #endif
 
+#include "SPERR_C_API.h"
 #include "SZ3/api/sz.hpp"
 #include "blaz/blaz.hpp"
 #include "cppsim/circuit.hpp"
@@ -32,10 +33,8 @@
 #include "cppsim/qasm_loader.hpp"
 #include "cppsim/state_quantize.hpp"
 #include "csim/MPIutil.hpp"
-#include "spdlog/spdlog.h"
-#include "mgard/compress_x.hpp"
-#include "SPERR_C_API.h"
 #include "fpzip.h"
+#include "spdlog/spdlog.h"
 #include "zfp.h"
 #include "zstd.h"
 
@@ -396,14 +395,12 @@ std::vector<CTYPE> make_haar_random(std::size_t dim, std::mt19937 &rng) {
     return v;
 }
 
-std::vector<CTYPE> make_low_freq_with_rng(
-    std::size_t dim, std::mt19937 &rng) {
+std::vector<CTYPE> make_low_freq_with_rng(std::size_t dim, std::mt19937 &rng) {
     (void)rng;
     return make_low_freq(dim);
 }
 
-std::vector<CTYPE> make_high_freq_with_rng(
-    std::size_t dim, std::mt19937 &rng) {
+std::vector<CTYPE> make_high_freq_with_rng(std::size_t dim, std::mt19937 &rng) {
     (void)rng;
     return make_high_freq(dim);
 }
@@ -501,8 +498,8 @@ int benchmark_quantization(int argc, char **argv) {
     const uint64_t local_bytes_no_quant_run =
         mpiutil.get_bytes_exchanged_no_quant();
     std::vector<CTYPE> normal_output(static_cast<size_t>(normal_state.dim));
-    std::copy_n(
-        normal_state.data_cpp(), static_cast<size_t>(normal_state.dim), normal_output.data());
+    std::copy_n(normal_state.data_cpp(), static_cast<size_t>(normal_state.dim),
+        normal_output.data());
 
     QuantumStateCpuQuant quant_state(qubit_count, true);
     quant_state.set_computational_basis(0);
@@ -514,8 +511,8 @@ int benchmark_quantization(int argc, char **argv) {
     }
     const uint64_t local_bytes_quant_run = mpiutil.get_bytes_exchanged_quant();
     std::vector<CTYPE> quant_output(static_cast<size_t>(quant_state.dim));
-    std::copy_n(
-        quant_state.data_cpp(), static_cast<size_t>(quant_state.dim), quant_output.data());
+    std::copy_n(quant_state.data_cpp(), static_cast<size_t>(quant_state.dim),
+        quant_output.data());
 
     // Reset default back to non-quantized communication.
     mpiutil.set_quant_comm_enabled(false);
@@ -551,21 +548,22 @@ int benchmark_quantization(int argc, char **argv) {
     uint64_t global_bytes_quant_run = 0;
     MPI_Reduce(
         &local_l2_sq, &global_l2_sq, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_max_abs, &global_max_abs, 1, MPI_DOUBLE, MPI_MAX, 0,
+        MPI_COMM_WORLD);
     MPI_Reduce(
-        &local_max_abs, &global_max_abs, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_tvd, &global_tvd, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(
-        &local_inner_re, &global_inner_re, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(
-        &local_inner_im, &global_inner_im, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+        &local_tvd, &global_tvd, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_inner_re, &global_inner_re, 1, MPI_DOUBLE, MPI_SUM, 0,
+        MPI_COMM_WORLD);
+    MPI_Reduce(&local_inner_im, &global_inner_im, 1, MPI_DOUBLE, MPI_SUM, 0,
+        MPI_COMM_WORLD);
     MPI_Reduce(&local_norm_normal_sq, &global_norm_normal_sq, 1, MPI_DOUBLE,
         MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_norm_quant_sq, &global_norm_quant_sq, 1, MPI_DOUBLE,
         MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&local_bytes_no_quant_run, &global_bytes_no_quant_run, 1,
         MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&local_bytes_quant_run, &global_bytes_quant_run, 1,
-        MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&local_bytes_quant_run, &global_bytes_quant_run, 1, MPI_UINT64_T,
+        MPI_SUM, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
         const double numerator = global_inner_re * global_inner_re +
@@ -588,7 +586,6 @@ int benchmark_quantization(int argc, char **argv) {
     return 0;
 }
 
-
 namespace {
 struct BenchResult {
     bool ok = false;
@@ -600,8 +597,8 @@ struct BenchResult {
     double fid = 0.0;
 };
 
-using CompressorRunner =
-    BenchResult (*)(const std::vector<CTYPE> &, std::size_t);
+using CompressorRunner = BenchResult (*)(
+    const std::vector<CTYPE> &, std::size_t);
 
 struct CompressorCase {
     const char *compressor;
@@ -630,11 +627,12 @@ std::size_t blaz_comp_bytes(const BlazCompressedComplex &comp) {
            comp.i.size() * sizeof(std::size_t) +
            comp.mask.size() * sizeof(MaskWord) +
            comp.N_r.size() * sizeof(double) + comp.N_i.size() * sizeof(double) +
-           comp.F_r.size() * sizeof(BinType) + comp.F_i.size() * sizeof(BinType);
+           comp.F_r.size() * sizeof(BinType) +
+           comp.F_i.size() * sizeof(BinType);
 }
 
-SZ3::Config make_sz_config(
-    std::size_t dim, SZ3::EB eb_mode, double eb, SZ3::ALGO algo, int block_size) {
+SZ3::Config make_sz_config(std::size_t dim, SZ3::EB eb_mode, double eb,
+    SZ3::ALGO algo, int block_size) {
     SZ3::Config cfg(dim);
     cfg.errorBoundMode = eb_mode;
     if (eb_mode == SZ3::EB_REL) {
@@ -724,26 +722,26 @@ std::vector<uint64_t> make_words_for_xor_pipeline(
 
     if (interleave_ri) {
         for (std::size_t i = 0; i < n; ++i) {
-            const uint64_t rb = truncate_double_word(
-                bits_of_double(std::real(input[i])), drop_bits,
-                kGlobalAbsErrorBound);
-            const uint64_t ib = truncate_double_word(
-                bits_of_double(std::imag(input[i])), drop_bits,
-                kGlobalAbsErrorBound);
+            const uint64_t rb =
+                truncate_double_word(bits_of_double(std::real(input[i])),
+                    drop_bits, kGlobalAbsErrorBound);
+            const uint64_t ib =
+                truncate_double_word(bits_of_double(std::imag(input[i])),
+                    drop_bits, kGlobalAbsErrorBound);
             words.push_back(rb);
             words.push_back(ib);
         }
     } else {
         for (std::size_t i = 0; i < n; ++i) {
-            const uint64_t rb = truncate_double_word(
-                bits_of_double(std::real(input[i])), drop_bits,
-                kGlobalAbsErrorBound);
+            const uint64_t rb =
+                truncate_double_word(bits_of_double(std::real(input[i])),
+                    drop_bits, kGlobalAbsErrorBound);
             words.push_back(rb);
         }
         for (std::size_t i = 0; i < n; ++i) {
-            const uint64_t ib = truncate_double_word(
-                bits_of_double(std::imag(input[i])), drop_bits,
-                kGlobalAbsErrorBound);
+            const uint64_t ib =
+                truncate_double_word(bits_of_double(std::imag(input[i])),
+                    drop_bits, kGlobalAbsErrorBound);
             words.push_back(ib);
         }
     }
@@ -807,8 +805,8 @@ std::vector<uint8_t> encode_xor_lz(const std::vector<uint64_t> &words) {
     return out;
 }
 
-bool decode_xor_lz(const uint8_t *data, std::size_t len, std::vector<uint64_t> &words,
-    std::string &error) {
+bool decode_xor_lz(const uint8_t *data, std::size_t len,
+    std::vector<uint64_t> &words, std::string &error) {
     if (len < 8) {
         error = "xor_lz decode: payload too short";
         return false;
@@ -850,8 +848,8 @@ BenchResult run_xor_lz_bitplane_zstd(
     const size_t cmp_size = ZSTD_compress(
         cmp.data(), cap, encoded.data(), encoded.size(), kZstdLevel);
     if (ZSTD_isError(cmp_size)) {
-        return BenchResult{false, std::string("zstd_compress: ") +
-                                      ZSTD_getErrorName(cmp_size)};
+        return BenchResult{false,
+            std::string("zstd_compress: ") + ZSTD_getErrorName(cmp_size)};
     }
     cmp.resize(cmp_size);
     const auto t1 = std::chrono::steady_clock::now();
@@ -867,8 +865,8 @@ BenchResult run_xor_lz_bitplane_zstd(
     const size_t actual_dec = ZSTD_decompress(
         dec_encoded.data(), dec_encoded.size(), cmp.data(), cmp.size());
     if (ZSTD_isError(actual_dec)) {
-        return BenchResult{
-            false, std::string("zstd_decompress: ") + ZSTD_getErrorName(actual_dec)};
+        return BenchResult{false,
+            std::string("zstd_decompress: ") + ZSTD_getErrorName(actual_dec)};
     }
     if (actual_dec != dec_encoded.size()) {
         return BenchResult{false, "zstd_decompress size mismatch"};
@@ -876,7 +874,8 @@ BenchResult run_xor_lz_bitplane_zstd(
 
     std::vector<uint64_t> dec_words;
     std::string err;
-    if (!decode_xor_lz(dec_encoded.data(), dec_encoded.size(), dec_words, err)) {
+    if (!decode_xor_lz(
+            dec_encoded.data(), dec_encoded.size(), dec_words, err)) {
         return BenchResult{false, err};
     }
     std::vector<CTYPE> restored(input.size());
@@ -887,7 +886,8 @@ BenchResult run_xor_lz_bitplane_zstd(
         std::chrono::duration<double, std::milli>(t1 - t0).count();
     const double decompress_ms =
         std::chrono::duration<double, std::milli>(t2 - t1).count();
-    const double original_bytes = static_cast<double>(input.size() * sizeof(CTYPE));
+    const double original_bytes =
+        static_cast<double>(input.size() * sizeof(CTYPE));
     const double ratio =
         cmp_size > 0 ? (original_bytes / static_cast<double>(cmp_size)) : 0.0;
     return BenchResult{true, "", compress_ms, decompress_ms, ratio,
@@ -907,8 +907,8 @@ BenchResult run_xor_lz_bitplane_zstd_d(
 bool zfp_compress_decompress_channel(const std::vector<double> &in,
     std::vector<double> &out, double &compress_ms, double &decompress_ms,
     std::size_t &compressed_bytes, std::string &error) {
-    zfp_field *field =
-        zfp_field_1d(const_cast<double *>(in.data()), zfp_type_double, in.size());
+    zfp_field *field = zfp_field_1d(
+        const_cast<double *>(in.data()), zfp_type_double, in.size());
     if (!field) {
         error = "zfp_field_1d failed";
         return false;
@@ -1016,6 +1016,7 @@ BenchResult run_zfp_accuracy_abs(
         fidelity(input, restored)};
 }
 
+/*
 BenchResult run_mgard_abs_global(
     const std::vector<CTYPE> &input, std::size_t dim) {
     (void)dim;
@@ -1027,19 +1028,21 @@ BenchResult run_mgard_abs_global(
     }
 
     if (n < 6 || (n % 2) != 0) {
-        return BenchResult{false, "mgard requires n>=6 and even for 2d packing"};
+        return BenchResult{
+            false, "mgard requires n>=6 and even for 2d packing"};
     }
 
     void *compressed_data = nullptr;
     void *decompressed_data = nullptr;
     std::size_t compressed_bytes = 0;
-    const std::vector<mgard_x::SIZE> shape = {static_cast<mgard_x::SIZE>(n / 2), 4};
+    const std::vector<mgard_x::SIZE> shape = {
+        static_cast<mgard_x::SIZE>(n / 2), 4};
 
     const auto t0 = std::chrono::steady_clock::now();
-    const mgard_x::compress_status_type cstat = mgard_x::compress(2,
-        mgard_x::data_type::Double, shape, kGlobalAbsErrorBound, 0.0,
-        mgard_x::error_bound_type::ABS, interleaved.data(), compressed_data,
-        compressed_bytes, false);
+    const mgard_x::compress_status_type cstat =
+        mgard_x::compress(2, mgard_x::data_type::Double, shape,
+            kGlobalAbsErrorBound, 0.0, mgard_x::error_bound_type::ABS,
+            interleaved.data(), compressed_data, compressed_bytes, false);
     const auto t1 = std::chrono::steady_clock::now();
     if (cstat != mgard_x::compress_status_type::Success || !compressed_data) {
         return BenchResult{false, "mgard compress failed"};
@@ -1047,8 +1050,9 @@ BenchResult run_mgard_abs_global(
 
     std::vector<mgard_x::SIZE> dec_shape;
     mgard_x::data_type dec_dtype = mgard_x::data_type::Double;
-    const mgard_x::compress_status_type dstat = mgard_x::decompress(
-        compressed_data, compressed_bytes, decompressed_data, dec_shape, dec_dtype, false);
+    const mgard_x::compress_status_type dstat =
+        mgard_x::decompress(compressed_data, compressed_bytes,
+            decompressed_data, dec_shape, dec_dtype, false);
     const auto t2 = std::chrono::steady_clock::now();
     if (dstat != mgard_x::compress_status_type::Success || !decompressed_data) {
         free(compressed_data);
@@ -1062,10 +1066,12 @@ BenchResult run_mgard_abs_global(
     }
 
     std::vector<double> restored_interleaved(2 * n);
-    std::memcpy(restored_interleaved.data(), decompressed_data, restored_interleaved.size() * sizeof(double));
+    std::memcpy(restored_interleaved.data(), decompressed_data,
+        restored_interleaved.size() * sizeof(double));
     std::vector<CTYPE> restored(n);
     for (std::size_t i = 0; i < n; ++i) {
-        restored[i] = CTYPE(restored_interleaved[2 * i], restored_interleaved[2 * i + 1]);
+        restored[i] =
+            CTYPE(restored_interleaved[2 * i], restored_interleaved[2 * i + 1]);
     }
 
     free(compressed_data);
@@ -1073,16 +1079,17 @@ BenchResult run_mgard_abs_global(
 
     const double original_bytes = static_cast<double>(n * sizeof(CTYPE));
     const double ratio =
-        compressed_bytes > 0 ? (original_bytes / static_cast<double>(compressed_bytes))
-                             : 0.0;
+        compressed_bytes > 0
+            ? (original_bytes / static_cast<double>(compressed_bytes))
+            : 0.0;
     const double compress_ms =
         std::chrono::duration<double, std::milli>(t1 - t0).count();
     const double decompress_ms =
         std::chrono::duration<double, std::milli>(t2 - t1).count();
     return BenchResult{true, "", compress_ms, decompress_ms, ratio,
-        tvd_prob(input, restored),
-        fidelity(input, restored)};
+        tvd_prob(input, restored), fidelity(input, restored)};
 }
+        */
 
 BenchResult run_sperr_2d_pwe_abs_global(
     const std::vector<CTYPE> &input, std::size_t dim) {
@@ -1099,8 +1106,9 @@ BenchResult run_sperr_2d_pwe_abs_global(
     void *cmp = nullptr;
     std::size_t cmp_len = 0;
     const auto t0 = std::chrono::steady_clock::now();
-    const int rc = C_API::sperr_comp_2d(interleaved.data(), 0, 2, n,
-        3 /* mode=pwe */, kGlobalAbsErrorBound, 0 /* no header */, &cmp, &cmp_len);
+    const int rc =
+        C_API::sperr_comp_2d(interleaved.data(), 0, 2, n, 3 /* mode=pwe */,
+            kGlobalAbsErrorBound, 0 /* no header */, &cmp, &cmp_len);
     const auto t1 = std::chrono::steady_clock::now();
     if (rc != 0 || cmp == nullptr || cmp_len == 0) {
         if (cmp) {
@@ -1110,8 +1118,7 @@ BenchResult run_sperr_2d_pwe_abs_global(
     }
 
     void *dec = nullptr;
-    const int rd =
-        C_API::sperr_decomp_2d(cmp, cmp_len, 0, 2, n, &dec);
+    const int rd = C_API::sperr_decomp_2d(cmp, cmp_len, 0, 2, n, &dec);
     const auto t2 = std::chrono::steady_clock::now();
     if (rd != 0 || dec == nullptr) {
         free(cmp);
@@ -1248,15 +1255,16 @@ BenchResult run_blaz_block64_keep3of4(
     blaz_decompress_1d_complex_array(&comp, restored.data());
     const auto t2 = std::chrono::steady_clock::now();
     total_comp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    total_decomp_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    total_decomp_ms +=
+        std::chrono::duration<double, std::milli>(t2 - t1).count();
     total_cmp_bytes += static_cast<double>(blaz_comp_bytes(comp));
 
     const double avg_cmp_bytes = total_cmp_bytes;
     const double original_bytes = static_cast<double>(dim * sizeof(CTYPE));
     const double ratio =
         avg_cmp_bytes > 0.0 ? (original_bytes / avg_cmp_bytes) : 0.0;
-    return BenchResult{true, "", total_comp_ms, total_decomp_ms,
-        ratio, tvd_prob(input, restored), fidelity(input, restored)};
+    return BenchResult{true, "", total_comp_ms, total_decomp_ms, ratio,
+        tvd_prob(input, restored), fidelity(input, restored)};
 }
 
 BenchResult run_blaz_block128_keep1of2(
@@ -1284,15 +1292,16 @@ BenchResult run_blaz_block128_keep1of2(
     blaz_decompress_1d_complex_array(&comp, restored.data());
     const auto t2 = std::chrono::steady_clock::now();
     total_comp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    total_decomp_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    total_decomp_ms +=
+        std::chrono::duration<double, std::milli>(t2 - t1).count();
     total_cmp_bytes += static_cast<double>(blaz_comp_bytes(comp));
 
     const double avg_cmp_bytes = total_cmp_bytes;
     const double original_bytes = static_cast<double>(dim * sizeof(CTYPE));
     const double ratio =
         avg_cmp_bytes > 0.0 ? (original_bytes / avg_cmp_bytes) : 0.0;
-    return BenchResult{true, "", total_comp_ms, total_decomp_ms,
-        ratio, tvd_prob(input, restored), fidelity(input, restored)};
+    return BenchResult{true, "", total_comp_ms, total_decomp_ms, ratio,
+        tvd_prob(input, restored), fidelity(input, restored)};
 }
 
 BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
@@ -1308,12 +1317,10 @@ BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
     double total_decomp_ms = 0.0;
     double total_cmp_bytes = 0.0;
     std::vector<CTYPE> restored(n);
-    SZ3::Config cfg_real =
-        make_sz_config(dim, SZ3::EB_ABS, kGlobalAbsErrorBound,
-            SZ3::ALGO_INTERP_LORENZO, 64);
-    SZ3::Config cfg_imag =
-        make_sz_config(dim, SZ3::EB_ABS, kGlobalAbsErrorBound,
-            SZ3::ALGO_INTERP_LORENZO, 64);
+    SZ3::Config cfg_real = make_sz_config(
+        dim, SZ3::EB_ABS, kGlobalAbsErrorBound, SZ3::ALGO_INTERP_LORENZO, 64);
+    SZ3::Config cfg_imag = make_sz_config(
+        dim, SZ3::EB_ABS, kGlobalAbsErrorBound, SZ3::ALGO_INTERP_LORENZO, 64);
 
     const auto t0 = std::chrono::steady_clock::now();
     std::size_t cmp_size_real = 0;
@@ -1340,7 +1347,8 @@ BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
     const auto t2 = std::chrono::steady_clock::now();
 
     total_comp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    total_decomp_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    total_decomp_ms +=
+        std::chrono::duration<double, std::milli>(t2 - t1).count();
     total_cmp_bytes += static_cast<double>(cmp_size_real + cmp_size_imag);
 
     for (std::size_t i = 0; i < n; ++i) {
@@ -1354,8 +1362,8 @@ BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
     const double original_bytes = static_cast<double>(dim * sizeof(CTYPE));
     const double ratio =
         avg_cmp_bytes > 0.0 ? (original_bytes / avg_cmp_bytes) : 0.0;
-    return BenchResult{true, "", total_comp_ms, total_decomp_ms,
-        ratio, tvd_prob(input, restored), fidelity(input, restored)};
+    return BenchResult{true, "", total_comp_ms, total_decomp_ms, ratio,
+        tvd_prob(input, restored), fidelity(input, restored)};
 }
 
 BenchResult run_sz3_lorenzo_reg_rel1e4_b64(
@@ -1371,12 +1379,10 @@ BenchResult run_sz3_lorenzo_reg_rel1e4_b64(
     double total_decomp_ms = 0.0;
     double total_cmp_bytes = 0.0;
     std::vector<CTYPE> restored(n);
-    SZ3::Config cfg_real =
-        make_sz_config(dim, SZ3::EB_REL, kGlobalRelErrorBound,
-            SZ3::ALGO_LORENZO_REG, 64);
-    SZ3::Config cfg_imag =
-        make_sz_config(dim, SZ3::EB_REL, kGlobalRelErrorBound,
-            SZ3::ALGO_LORENZO_REG, 64);
+    SZ3::Config cfg_real = make_sz_config(
+        dim, SZ3::EB_REL, kGlobalRelErrorBound, SZ3::ALGO_LORENZO_REG, 64);
+    SZ3::Config cfg_imag = make_sz_config(
+        dim, SZ3::EB_REL, kGlobalRelErrorBound, SZ3::ALGO_LORENZO_REG, 64);
 
     const auto t0 = std::chrono::steady_clock::now();
     std::size_t cmp_size_real = 0;
@@ -1403,7 +1409,8 @@ BenchResult run_sz3_lorenzo_reg_rel1e4_b64(
     const auto t2 = std::chrono::steady_clock::now();
 
     total_comp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    total_decomp_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+    total_decomp_ms +=
+        std::chrono::duration<double, std::milli>(t2 - t1).count();
     total_cmp_bytes += static_cast<double>(cmp_size_real + cmp_size_imag);
 
     for (std::size_t i = 0; i < n; ++i) {
@@ -1417,8 +1424,8 @@ BenchResult run_sz3_lorenzo_reg_rel1e4_b64(
     const double original_bytes = static_cast<double>(dim * sizeof(CTYPE));
     const double ratio =
         avg_cmp_bytes > 0.0 ? (original_bytes / avg_cmp_bytes) : 0.0;
-    return BenchResult{true, "", total_comp_ms, total_decomp_ms,
-        ratio, tvd_prob(input, restored), fidelity(input, restored)};
+    return BenchResult{true, "", total_comp_ms, total_decomp_ms, ratio,
+        tvd_prob(input, restored), fidelity(input, restored)};
 }
 }  // namespace
 
@@ -1435,10 +1442,10 @@ int benchmark_compressor(int argc, char **argv) {
     const std::vector<CompressorCase> cases = {
         {"blaz", "block64_keep3of4", &run_blaz_block64_keep3of4},
         {"blaz", "block128_keep1of2", &run_blaz_block128_keep1of2},
-        {"sz3", "interp_lorenzo_abs1e-6_b64", &run_sz3_interp_lorenzo_abs1e6_b64},
+        {"sz3", "interp_lorenzo_abs1e-6_b64",
+            &run_sz3_interp_lorenzo_abs1e6_b64},
         {"sz3", "lorenzo_reg_rel1e-4_b64", &run_sz3_lorenzo_reg_rel1e4_b64},
         {"zfp", "accuracy_abs_global", &run_zfp_accuracy_abs},
-        {"mgard", "abs_global", &run_mgard_abs_global},
         {"sperr", "2d_pwe_abs_global", &run_sperr_2d_pwe_abs_global},
         {"fpzip", "2d_prec_abs_global", &run_fpzip_2d_precision_abs},
         {"xor_lz_zstd", "C_separate_ri", &run_xor_lz_bitplane_zstd_c},
@@ -1448,7 +1455,8 @@ int benchmark_compressor(int argc, char **argv) {
     const std::string out_root = "results/benchmark_compressor";
     ensure_output_dir(out_root);
     std::ofstream csv(out_root + "/metrics.csv");
-    csv << "compressor,config,dim,family,compress_ms,decompress_ms,ratio,tvd,fidelity,status\n";
+    csv << "compressor,config,dim,family,compress_ms,decompress_ms,ratio,tvd,"
+           "fidelity,status\n";
 
     std::cout << "compressor benchmark abs_eb=" << kGlobalAbsErrorBound
               << " rel_eb=" << kGlobalRelErrorBound << " dims=[";
@@ -1514,7 +1522,8 @@ int benchmark_compressor(int argc, char **argv) {
                 }
                 if (!r.ok) {
                     csv << c.compressor << "," << c.config << "," << dim << ","
-                        << fam_case.name << ",0,0,0,0,0,skip:" << r.error << "\n";
+                        << fam_case.name << ",0,0,0,0,0,skip:" << r.error
+                        << "\n";
                     std::cout << "dim=" << dim << " family=" << fam_case.name
                               << " compressor=" << c.compressor
                               << " config=" << c.config
@@ -1523,8 +1532,9 @@ int benchmark_compressor(int argc, char **argv) {
                 }
 
                 csv << c.compressor << "," << c.config << "," << dim << ","
-                    << fam_case.name << "," << r.compress_ms << "," << r.decompress_ms
-                    << "," << r.ratio << "," << r.tvd << "," << r.fid << ",ok\n";
+                    << fam_case.name << "," << r.compress_ms << ","
+                    << r.decompress_ms << "," << r.ratio << "," << r.tvd << ","
+                    << r.fid << ",ok\n";
                 std::cout << "dim=" << dim << " family=" << fam_case.name
                           << " compressor=" << c.compressor
                           << " config=" << c.config
