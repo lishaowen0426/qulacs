@@ -260,8 +260,8 @@ void blaz_decompress_1d_complex_array(
     }();
     assert(comp->N_r.size() == num_blocks);
     assert(comp->N_i.size() == num_blocks);
-    assert(comp->F_r.size() == num_blocks * kept_count);
-    assert(comp->F_i.size() == num_blocks * kept_count);
+    assert(comp->F_r.size() == kept_count);
+    assert(comp->F_i.size() == kept_count);
 
     std::vector<double> coeff(block, 0.0);
     std::vector<double> time(block, 0.0);
@@ -309,6 +309,8 @@ void blaz_decompress_1d_complex_array(
             out_state[pos] = CTYPE(std::real(out_state[pos]), time[t]);
         }
     }
+    assert(fr_idx == comp->F_r.size());
+    assert(fi_idx == comp->F_i.size());
 }
 
 CTYPE blaz_dot_product(
