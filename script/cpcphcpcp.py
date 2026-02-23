@@ -33,7 +33,7 @@ class MaslovRoettelerNF:
     def lemma12(
         self,
     ) -> tuple[
-        NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8]
+        int, NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8], NDArray[np.uint8]
     ]:
         m = self.symplectic_matrix[self.n :, :]
         l1, p1, m1, u1, u1inv_t = lpu_rect_symplectic(m)
@@ -176,15 +176,210 @@ class MaslovRoettelerNF:
             )
 
         return (
+            k,
             np.asarray(l, dtype=np.uint8),
             np.asarray(u, dtype=np.uint8),
             np.asarray(sigma, dtype=np.uint8),
             np.asarray(tau, dtype=np.uint8),
         )
 
-    def theorem13(self) -> None:
+    def theorem13_step1(self):
         # Step 1: Apply Lemma 12.
-        l, u, sigma, tau = self.lemma12()
+        k, l, u, sigma, tau = self.lemma12()
+
+        n = self.n
+        m = GF2(self.symplectic_matrix)
+
+        l_mat = GF2(l)
+        u_mat = GF2(u)
+        sigma_mat = GF2(sigma)
+        tau_mat = GF2(tau)
+        z = GF2.Zeros((n, n))
+
+        left_sigma = GF2(np.block([[sigma_mat, z], [z, sigma_mat]]))
+        left_l = GF2(
+            np.block([[np.linalg.inv(l_mat.T), z], [z, l_mat]])
+        )  # diag((L^T)^-1, L)
+        right_u = GF2(
+            np.block([[u_mat, z], [z, np.linalg.inv(u_mat.T)]])
+        )  # diag(U, (U^T)^-1)
+        right_tau = GF2(np.block([[tau_mat, z], [z, tau_mat]]))  # diag(tau, tau)
+
+        m1 = left_sigma @ left_l @ m @ right_u @ right_tau
+
+        c_lower_left = m1[n:, :n]
+        k_from_m1 = int(np.count_nonzero(np.any(c_lower_left.row_reduce(), axis=1)))
+        if k_from_m1 != k:
+            raise ValueError(
+                f"Inconsistent k: lemma12 returned {k}, but M1 implies {k_from_m1}."
+            )
+
+        r0 = slice(0, k)
+        r1 = slice(k, n)
+        r2 = slice(n, n + k)
+        c0 = slice(0, k)
+        c1 = slice(k, n)
+        c2 = slice(n, n + k)
+        c3 = slice(n + k, 2 * n)
+
+        a1 = m1[r0, c0]
+        a2 = m1[r0, c1]
+        a3 = m1[r1, c0]
+        a4 = m1[r1, c1]
+        b1 = m1[r0, c2]
+        b2 = m1[r0, c3]
+        b3 = m1[r1, c2]
+        b4 = m1[r1, c3]
+        d1 = m1[r2, c2]
+        d2 = m1[r2, c3]
+
+        if np.any(np.asarray(a2, dtype=np.uint8)):
+            raise ValueError("Theorem13 step1 check failed: A2 is not zero.")
+        if not np.array_equal(
+            np.asarray(a4, dtype=np.uint8), np.asarray(identity(n - k), dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step1 check failed: A4 is not I_(n-k).")
+        if not np.array_equal(
+            np.asarray(a1, dtype=np.uint8), np.asarray(a1.T, dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step1 check failed: A1 is not symmetric.")
+
+        return {
+            "k": k,
+            "M1": np.asarray(m1, dtype=np.uint8),
+            "A1": np.asarray(a1, dtype=np.uint8),
+            "A2": np.asarray(a2, dtype=np.uint8),
+            "A3": np.asarray(a3, dtype=np.uint8),
+            "A4": np.asarray(a4, dtype=np.uint8),
+            "B1": np.asarray(b1, dtype=np.uint8),
+            "B2": np.asarray(b2, dtype=np.uint8),
+            "B3": np.asarray(b3, dtype=np.uint8),
+            "B4": np.asarray(b4, dtype=np.uint8),
+            "D1": np.asarray(d1, dtype=np.uint8),
+            "D2": np.asarray(d2, dtype=np.uint8),
+        }
+
+    def theorem13(self):
+        step1 = self.theorem13_step1()
+        leftpc, step2 = self.theorem13_step2(step1)
+        rightpc, m3 = self.theorem13_step3(step2)
+
+    def theorem13_step2(self, step1_result):
+        n = self.n
+        k = int(step1_result["k"])
+        m1 = GF2(step1_result["M1"])
+        a1 = GF2(step1_result["A1"])
+        a3 = GF2(step1_result["A3"])
+
+        a_sym = GF2.Zeros((n, n))
+        a_sym[:k, :k] = a1
+        a_sym[:k, k:] = a3.T
+        a_sym[k:, :k] = a3
+        # lower-right block stays zero
+
+        i_k = identity(k)
+        i_nk = identity(n - k)
+        z_k_nk = GF2.Zeros((k, n - k))
+        z_nk_k = GF2.Zeros((n - k, k))
+        z_nk_nk = GF2.Zeros((n - k, n - k))
+        z_k_k = GF2.Zeros((k, k))
+
+        left_step2 = GF2(
+            np.block(
+                [
+                    [i_k, z_k_nk, a1, a3.T],
+                    [z_nk_k, i_nk, a3, z_nk_nk],
+                    [z_k_k, z_k_nk, i_k, z_k_nk],
+                    [z_nk_k, z_nk_nk, z_nk_k, i_nk],
+                ]
+            )
+        )
+        m2 = left_step2 @ m1
+
+        r0 = slice(0, k)
+        r1 = slice(k, n)
+        r2 = slice(n, n + k)
+        c2 = slice(n, n + k)
+        c3 = slice(n + k, 2 * n)
+
+        b1p = m2[r0, c2]
+        b2p = m2[r0, c3]
+        b3p = m2[r1, c2]
+        b4p = m2[r1, c3]
+        d1 = m2[r2, c2]
+        d2 = m2[r2, c3]
+
+        if not np.array_equal(
+            np.asarray(b1p, dtype=np.uint8), np.asarray(identity(k), dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step2 check failed: B1' is not I_k.")
+        if not np.array_equal(
+            np.asarray(d1, dtype=np.uint8), np.asarray(d1.T, dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step2 check failed: D1 is not symmetric.")
+        if np.any(np.asarray(b2p, dtype=np.uint8)):
+            raise ValueError("Theorem13 step2 check failed: B2' is not zero.")
+        if not np.array_equal(
+            np.asarray(b4p, dtype=np.uint8), np.asarray(b4p.T, dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step2 check failed: B4' is not symmetric.")
+        if not np.array_equal(
+            np.asarray(b3p, dtype=np.uint8), np.asarray(d2.T, dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 step2 check failed: B3' is not equal to D2^T.")
+
+        return np.asarray(a_sym, dtype=np.uint8), {
+            "M2": np.asarray(m2, dtype=np.uint8),
+            "B1p": np.asarray(b1p, dtype=np.uint8),
+            "B2p": np.asarray(b2p, dtype=np.uint8),
+            "B3p": np.asarray(b3p, dtype=np.uint8),
+            "B4p": np.asarray(b4p, dtype=np.uint8),
+            "D1": np.asarray(d1, dtype=np.uint8),
+            "D2": np.asarray(d2, dtype=np.uint8),
+        }
+
+    def theorem13_step3(self, step2_result):
+        n = self.n
+        m2 = GF2(step2_result["M2"])
+        d1 = GF2(step2_result["D1"])
+        d2 = GF2(step2_result["D2"])
+        b4p = GF2(step2_result["B4p"])
+
+        k = d1.shape[0]
+        if d1.shape != (k, k):
+            raise ValueError(f"Invalid D1 shape {d1.shape}.")
+        if d2.shape != (k, n - k):
+            raise ValueError(f"Invalid D2 shape {d2.shape}; expected ({k}, {n-k}).")
+        if b4p.shape != (n - k, n - k):
+            raise ValueError(f"Invalid B4' shape {b4p.shape}; expected ({n-k}, {n-k}).")
+
+        sym_step3 = GF2.Zeros((n, n))
+        sym_step3[:k, :k] = d1
+        sym_step3[:k, k:] = d2
+        sym_step3[k:, :k] = d2.T
+        sym_step3[k:, k:] = b4p
+
+        i_k = identity(k)
+        i_nk = identity(n - k)
+        z_k_nk = GF2.Zeros((k, n - k))
+        z_nk_k = GF2.Zeros((n - k, k))
+        z_nk_nk = GF2.Zeros((n - k, n - k))
+        z_k_k = GF2.Zeros((k, k))
+
+        right_step3 = GF2(
+            np.block(
+                [
+                    [i_k, z_k_nk, d1, d2],
+                    [z_nk_k, i_nk, d2.T, b4p],
+                    [z_k_k, z_k_nk, i_k, z_k_nk],
+                    [z_nk_k, z_nk_nk, z_nk_k, i_nk],
+                ]
+            )
+        )
+
+        m3 = m2 @ right_step3
+
+        return np.asarray(sym_step3, dtype=np.uint8), np.asarray(m3, dtype=np.uint8)
 
 
 def identity(n: int):
@@ -420,4 +615,4 @@ S = fixed_symplectic_matrix()
 
 if __name__ == "__main__":
     assert check_symplectic(S, convention="standard")
-    MaslovRoettelerNF(S).lemma12()
+    MaslovRoettelerNF(S).theorem13()
