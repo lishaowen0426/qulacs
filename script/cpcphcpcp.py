@@ -272,8 +272,8 @@ class MaslovRoettelerNF:
             np.asarray(rightpc, dtype=np.uint8), np.asarray(rightpc.T, dtype=np.uint8)
         )
 
-        print(leftpc)
-        print(rightpc)
+        lc1, lp1, lc2, lp2 = lemma10(leftpc)
+        rc1, rp1, rc2, rp2 = lemma10(rightpc)
 
     def theorem13_step2(self, step1_result):
         n = self.n
@@ -411,6 +411,102 @@ def row_xor(a, dst: int, src: int) -> None:
 
 def col_xor(a, dst: int, src: int) -> None:
     a[:, dst] = a[:, dst] + a[:, src]
+
+
+def _lemma7_lower(
+    a_in: NDArray[np.uint8],
+) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
+    """Lower-triangular form of Lemma 7: A = L L^T + Lambda over GF(2)."""
+    a = GF2(a_in)
+    if a.ndim != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("A must be square.")
+    if not np.array_equal(
+        np.asarray(a, dtype=np.uint8), np.asarray(a.T, dtype=np.uint8)
+    ):
+        raise ValueError("A must be symmetric.")
+
+    n = a.shape[0]
+    l = identity(n)
+
+    for i in range(1, n):
+        for j in range(i):
+            # A_ij = sum_{k<j} L_ik L_jk + L_ij  (since L_jj = 1)
+            s = GF2(0)
+            if j > 0:
+                s = l[i, :j] @ l[j, :j].T
+            l[i, j] = a[i, j] + s
+
+    ll_t = l @ l.T
+    diag_vals = np.diag(np.asarray(a + ll_t, dtype=np.uint8))
+    lam = GF2.Zeros((n, n))
+    for i in range(n):
+        lam[i, i] = diag_vals[i]
+
+    if not np.array_equal(
+        np.asarray(ll_t + lam, dtype=np.uint8), np.asarray(a, dtype=np.uint8)
+    ):
+        raise ValueError("Lemma 7 decomposition failed sanity check.")
+
+    return np.asarray(l, dtype=np.uint8), np.asarray(lam, dtype=np.uint8)
+
+
+def lemma10(
+    a_in: NDArray[np.uint8],
+) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
+    """
+    Lemma 10 decomposition over GF(2): A = U U^T + Lambda,
+    where U is invertible upper-triangular and Lambda is diagonal.
+    """
+    a = GF2(a_in)
+    if a.ndim != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError("A must be square.")
+    if not np.array_equal(
+        np.asarray(a, dtype=np.uint8), np.asarray(a.T, dtype=np.uint8)
+    ):
+        raise ValueError("A must be symmetric.")
+
+    n = a.shape[0]
+    p = GF2(np.eye(n, dtype=np.uint8)[::-1])  # reversal permutation
+    a_rev = p @ a @ p
+
+    l_rev, lam_rev = _lemma7_lower(np.asarray(a_rev, dtype=np.uint8))
+    l_rev = GF2(l_rev)
+    lam_rev = GF2(lam_rev)
+
+    u = p @ l_rev @ p
+    lam = p @ lam_rev @ p
+
+    u_np = np.asarray(u, dtype=np.uint8)
+    if not np.all(u_np[np.tril_indices(n, k=-1)] == 0):
+        raise ValueError("Lemma 10 check failed: U is not upper triangular.")
+    if not np.all(np.diag(u_np) == 1):
+        raise ValueError("Lemma 10 check failed: U is not unit diagonal.")
+    lam_np = np.asarray(lam, dtype=np.uint8)
+    if np.any(lam_np - np.diag(np.diag(lam_np))):
+        raise ValueError("Lemma 10 check failed: Lambda is not diagonal.")
+    if not np.array_equal(
+        np.asarray(u @ u.T + lam, dtype=np.uint8), np.asarray(a, dtype=np.uint8)
+    ):
+        raise ValueError("Lemma 10 check failed: A != U U^T + Lambda.")
+
+    # Corollary 11 check for input a_in as the symmetric upper-right block B:
+    # [[I, B], [0, I]] = C-P-C-P factors from U and Lambda.
+    i_n = identity(n)
+    z_n = GF2.Zeros((n, n))
+    c1 = GF2(np.block([[u, z_n], [z_n, np.linalg.inv(u.T)]]))
+    p1 = GF2(np.block([[i_n, i_n], [z_n, i_n]]))
+    c2 = GF2(np.block([[np.linalg.inv(u), z_n], [z_n, u.T]]))
+    p2 = GF2(np.block([[i_n, lam], [z_n, i_n]]))
+    four_factor = c1 @ p1 @ c2 @ p2
+    target = GF2(np.block([[i_n, a], [z_n, i_n]]))
+    if not np.array_equal(
+        np.asarray(four_factor, dtype=np.uint8), np.asarray(target, dtype=np.uint8)
+    ):
+        raise ValueError(
+            "Corollary 11 check failed: C-P-C-P does not match [[I, A], [0, I]]."
+        )
+
+    return c1, p1, c2, p2
 
 
 def lpu_rect_symplectic(
