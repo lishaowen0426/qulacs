@@ -10,9 +10,9 @@ from pygsti.tools.symplectic import (
 )
 
 TEST_N = 8
-TEST_I = 3
+# TEST_I = 3
 # Full-rank C example:
-# TEST_I = 174533521197412727885233567186830402475
+TEST_I = 174533521197412727885233567186830402475
 GF2 = galois.GF(2)
 
 
@@ -198,11 +198,11 @@ class MaslovRoettelerNF:
 
         left_sigma = GF2(np.block([[sigma_mat, z], [z, sigma_mat]]))
         left_l = GF2(
-            np.block([[np.linalg.inv(l_mat.T), z], [z, l_mat]])
-        )  # diag((L^T)^-1, L)
+            np.block([[l_mat.T, z], [z, np.linalg.inv(l_mat)]])
+        )  # row-convention equivalent of diag((L^T)^-1, L)
         right_u = GF2(
-            np.block([[u_mat, z], [z, np.linalg.inv(u_mat.T)]])
-        )  # diag(U, (U^T)^-1)
+            np.block([[np.linalg.inv(u_mat), z], [z, u_mat.T]])
+        )  # row-convention equivalent of diag(U, (U^T)^-1)
         right_tau = GF2(np.block([[tau_mat, z], [z, tau_mat]]))  # diag(tau, tau)
 
         m1 = left_sigma @ left_l @ m @ right_u @ right_tau
@@ -263,6 +263,17 @@ class MaslovRoettelerNF:
         step1 = self.theorem13_step1()
         leftpc, step2 = self.theorem13_step2(step1)
         rightpc, m3 = self.theorem13_step3(step2)
+        assert leftpc.shape == (self.n, self.n)
+        assert rightpc.shape == (self.n, self.n)
+        assert np.array_equal(
+            np.asarray(leftpc, dtype=np.uint8), np.asarray(leftpc.T, dtype=np.uint8)
+        )
+        assert np.array_equal(
+            np.asarray(rightpc, dtype=np.uint8), np.asarray(rightpc.T, dtype=np.uint8)
+        )
+
+        print(leftpc)
+        print(rightpc)
 
     def theorem13_step2(self, step1_result):
         n = self.n
@@ -413,10 +424,10 @@ def lpu_rect_symplectic(
     a = m[:, :n].copy()
     b = m[:, n:].copy()
     if not np.array_equal(
-        np.asarray(a.T @ b, dtype=np.uint8), np.asarray(b.T @ a, dtype=np.uint8)
+        np.asarray(a @ b.T, dtype=np.uint8), np.asarray(b @ a.T, dtype=np.uint8)
     ):
         raise ValueError(
-            "Input blocks must satisfy C^T D = D^T C over GF(2). Check step 1 in theorem 13"
+            "Input blocks must satisfy C D^T = D C^T over GF(2) in row convention."
         )
 
     sigma = identity(n)
