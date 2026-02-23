@@ -44,3 +44,4 @@ int benchmark_quantization(int argc, char **argv);
 
 int benchmark_compressor(int argc, char **argv);
 
+int benchmark_sz3(int argc, char **argv);

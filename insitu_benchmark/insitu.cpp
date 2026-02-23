@@ -606,6 +606,14 @@ struct CompressorCase {
     CompressorRunner run;
 };
 
+struct Sz3Case {
+    const char *config;
+    SZ3::EB eb_mode;
+    double eb;
+    SZ3::ALGO algo;
+    int block_size;
+};
+
 constexpr double kGlobalAbsErrorBound = 1e-4;
 constexpr double kGlobalRelErrorBound = 1e-2;
 constexpr int kZstdLevel = 3;
@@ -1304,8 +1312,8 @@ BenchResult run_blaz_block128_keep1of2(
         tvd_prob(input, restored), fidelity(input, restored)};
 }
 
-BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
-    const std::vector<CTYPE> &input, std::size_t dim) {
+BenchResult run_sz3_with_config(const std::vector<CTYPE> &input, std::size_t dim,
+    SZ3::EB eb_mode, double eb, SZ3::ALGO algo, int block_size) {
     const std::size_t n = input.size();
     std::vector<double> real(n), imag(n);
     for (std::size_t i = 0; i < n; ++i) {
@@ -1317,10 +1325,8 @@ BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
     double total_decomp_ms = 0.0;
     double total_cmp_bytes = 0.0;
     std::vector<CTYPE> restored(n);
-    SZ3::Config cfg_real = make_sz_config(
-        dim, SZ3::EB_ABS, kGlobalAbsErrorBound, SZ3::ALGO_INTERP_LORENZO, 64);
-    SZ3::Config cfg_imag = make_sz_config(
-        dim, SZ3::EB_ABS, kGlobalAbsErrorBound, SZ3::ALGO_INTERP_LORENZO, 64);
+    SZ3::Config cfg_real = make_sz_config(dim, eb_mode, eb, algo, block_size);
+    SZ3::Config cfg_imag = make_sz_config(dim, eb_mode, eb, algo, block_size);
 
     const auto t0 = std::chrono::steady_clock::now();
     std::size_t cmp_size_real = 0;
@@ -1366,66 +1372,16 @@ BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
         tvd_prob(input, restored), fidelity(input, restored)};
 }
 
+BenchResult run_sz3_interp_lorenzo_abs1e6_b64(
+    const std::vector<CTYPE> &input, std::size_t dim) {
+    return run_sz3_with_config(input, dim, SZ3::EB_ABS, kGlobalAbsErrorBound,
+        SZ3::ALGO_INTERP_LORENZO, 64);
+}
+
 BenchResult run_sz3_lorenzo_reg_rel1e4_b64(
     const std::vector<CTYPE> &input, std::size_t dim) {
-    const std::size_t n = input.size();
-    std::vector<double> real(n), imag(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        real[i] = std::real(input[i]);
-        imag[i] = std::imag(input[i]);
-    }
-
-    double total_comp_ms = 0.0;
-    double total_decomp_ms = 0.0;
-    double total_cmp_bytes = 0.0;
-    std::vector<CTYPE> restored(n);
-    SZ3::Config cfg_real = make_sz_config(
-        dim, SZ3::EB_REL, kGlobalRelErrorBound, SZ3::ALGO_LORENZO_REG, 64);
-    SZ3::Config cfg_imag = make_sz_config(
-        dim, SZ3::EB_REL, kGlobalRelErrorBound, SZ3::ALGO_LORENZO_REG, 64);
-
-    const auto t0 = std::chrono::steady_clock::now();
-    std::size_t cmp_size_real = 0;
-    std::size_t cmp_size_imag = 0;
-    std::vector<char> cmp_real(sz_large_buffer_cap(cfg_real));
-    std::vector<char> cmp_imag(sz_large_buffer_cap(cfg_imag));
-    std::string err;
-    if (!sz_compress_with_large_buffer(
-            cfg_real, real.data(), cmp_real, cmp_size_real, err)) {
-        return BenchResult{false, "sz3_real:" + err};
-    }
-    if (!sz_compress_with_large_buffer(
-            cfg_imag, imag.data(), cmp_imag, cmp_size_imag, err)) {
-        return BenchResult{false, "sz3_imag:" + err};
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-
-    SZ3::Config dec_cfg_real;
-    SZ3::Config dec_cfg_imag;
-    double *dec_real =
-        SZ_decompress<double>(dec_cfg_real, cmp_real.data(), cmp_size_real);
-    double *dec_imag =
-        SZ_decompress<double>(dec_cfg_imag, cmp_imag.data(), cmp_size_imag);
-    const auto t2 = std::chrono::steady_clock::now();
-
-    total_comp_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    total_decomp_ms +=
-        std::chrono::duration<double, std::milli>(t2 - t1).count();
-    total_cmp_bytes += static_cast<double>(cmp_size_real + cmp_size_imag);
-
-    for (std::size_t i = 0; i < n; ++i) {
-        restored[i] = CTYPE(dec_real[i], dec_imag[i]);
-    }
-
-    delete[] dec_real;
-    delete[] dec_imag;
-
-    const double avg_cmp_bytes = total_cmp_bytes;
-    const double original_bytes = static_cast<double>(dim * sizeof(CTYPE));
-    const double ratio =
-        avg_cmp_bytes > 0.0 ? (original_bytes / avg_cmp_bytes) : 0.0;
-    return BenchResult{true, "", total_comp_ms, total_decomp_ms, ratio,
-        tvd_prob(input, restored), fidelity(input, restored)};
+    return run_sz3_with_config(input, dim, SZ3::EB_REL, kGlobalRelErrorBound,
+        SZ3::ALGO_LORENZO_REG, 64);
 }
 }  // namespace
 
@@ -1545,6 +1501,132 @@ int benchmark_compressor(int argc, char **argv) {
             }
         }
     }
+    std::cout << "wrote " << out_root << "/metrics.csv\n";
+    return 0;
+}
+
+int benchmark_sz3(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    const std::vector<UINT> qubits = {20};
+    std::vector<std::size_t> dims;
+    dims.reserve(qubits.size());
+    for (UINT q : qubits) {
+        dims.push_back(static_cast<std::size_t>(1ULL << q));
+    }
+
+    const std::vector<Sz3Case> cases = {
+        {"interp_lorenzo_abs1e-6_b64", SZ3::EB_ABS, 1e-6,
+            SZ3::ALGO_INTERP_LORENZO, 64},
+        {"interp_lorenzo_abs1e-5_b64", SZ3::EB_ABS, 1e-5,
+            SZ3::ALGO_INTERP_LORENZO, 64},
+        {"interp_lorenzo_rel1e-4_b64", SZ3::EB_REL, 1e-4,
+            SZ3::ALGO_INTERP_LORENZO, 64},
+        {"interp_lorenzo_rel1e-3_b64", SZ3::EB_REL, 1e-3,
+            SZ3::ALGO_INTERP_LORENZO, 64},
+        {"lorenzo_reg_abs1e-6_b64", SZ3::EB_ABS, 1e-6, SZ3::ALGO_LORENZO_REG,
+            64},
+        {"lorenzo_reg_abs1e-5_b64", SZ3::EB_ABS, 1e-5, SZ3::ALGO_LORENZO_REG,
+            64},
+        {"lorenzo_reg_rel1e-4_b64", SZ3::EB_REL, 1e-4, SZ3::ALGO_LORENZO_REG,
+            64},
+        {"lorenzo_reg_rel1e-3_b64", SZ3::EB_REL, 1e-3, SZ3::ALGO_LORENZO_REG,
+            64},
+        {"lorenzo_reg_rel1e-4_b128", SZ3::EB_REL, 1e-4, SZ3::ALGO_LORENZO_REG,
+            128},
+    };
+
+    const std::string out_root = "results/benchmark_sz3";
+    ensure_output_dir(out_root);
+    std::ofstream csv(out_root + "/metrics.csv");
+    csv << "compressor,config,dim,family,compress_ms,decompress_ms,ratio,tvd,"
+           "fidelity,status\n";
+
+    std::cout << "sz3 benchmark dims=[";
+    for (std::size_t i = 0; i < dims.size(); ++i) {
+        if (i > 0) {
+            std::cout << ",";
+        }
+        std::cout << dims[i];
+    }
+    std::cout << "] configs=" << cases.size() << "\n";
+
+    std::mt19937 rng(12345);
+    std::cout << std::setprecision(6) << std::scientific;
+    using FamilyMaker = std::vector<CTYPE> (*)(std::size_t, std::mt19937 &);
+    struct FamilyCase {
+        const char *name;
+        FamilyMaker make;
+    };
+    const std::vector<FamilyCase> family_cases = {
+        {"haar_random", &make_haar_random},
+    };
+
+    for (std::size_t dim : dims) {
+        for (const auto &fam_case : family_cases) {
+            std::vector<CTYPE> family_state;
+            try {
+                family_state = fam_case.make(dim, rng);
+            } catch (const std::bad_alloc &) {
+                csv << "sz3,all," << dim << "," << fam_case.name
+                    << ",0,0,0,0,0,skip:oom_family_build\n";
+                std::cout << "dim=" << dim << " family=" << fam_case.name
+                          << " status=skip:oom_family_build\n";
+                continue;
+            } catch (const std::exception &e) {
+                csv << "sz3,all," << dim << "," << fam_case.name
+                    << ",0,0,0,0,0,skip:family_build_error:" << e.what()
+                    << "\n";
+                std::cout << "dim=" << dim << " family=" << fam_case.name
+                          << " status=skip:family_build_error:" << e.what()
+                          << "\n";
+                continue;
+            } catch (...) {
+                csv << "sz3,all," << dim << "," << fam_case.name
+                    << ",0,0,0,0,0,skip:family_build_unknown\n";
+                std::cout << "dim=" << dim << " family=" << fam_case.name
+                          << " status=skip:family_build_unknown\n";
+                continue;
+            }
+
+            for (const auto &c : cases) {
+                BenchResult r;
+                try {
+                    r = run_sz3_with_config(
+                        family_state, dim, c.eb_mode, c.eb, c.algo, c.block_size);
+                } catch (const std::bad_alloc &) {
+                    r = BenchResult{false, "oom"};
+                } catch (const std::exception &e) {
+                    r = BenchResult{false, e.what()};
+                } catch (...) {
+                    r = BenchResult{false, "unknown_error"};
+                }
+
+                if (!r.ok) {
+                    csv << "sz3," << c.config << "," << dim << ","
+                        << fam_case.name << ",0,0,0,0,0,skip:" << r.error
+                        << "\n";
+                    std::cout << "dim=" << dim << " family=" << fam_case.name
+                              << " compressor=sz3"
+                              << " config=" << c.config
+                              << " status=skip:" << r.error << "\n";
+                    continue;
+                }
+
+                csv << "sz3," << c.config << "," << dim << "," << fam_case.name
+                    << "," << r.compress_ms << "," << r.decompress_ms << ","
+                    << r.ratio << "," << r.tvd << "," << r.fid << ",ok\n";
+                std::cout << "dim=" << dim << " family=" << fam_case.name
+                          << " compressor=sz3"
+                          << " config=" << c.config
+                          << " compress_ms=" << r.compress_ms
+                          << " decompress_ms=" << r.decompress_ms
+                          << " ratio=" << r.ratio << " tvd=" << r.tvd
+                          << " fidelity=" << r.fid << "\n";
+            }
+        }
+    }
+
     std::cout << "wrote " << out_root << "/metrics.csv\n";
     return 0;
 }
