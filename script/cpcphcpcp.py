@@ -247,6 +247,10 @@ class MaslovRoettelerNF:
         return {
             "k": k,
             "M1": np.asarray(m1, dtype=np.uint8),
+            "left_sigma": np.asarray(left_sigma, dtype=np.uint8),
+            "left_l": np.asarray(left_l, dtype=np.uint8),
+            "right_u": np.asarray(right_u, dtype=np.uint8),
+            "right_tau": np.asarray(right_tau, dtype=np.uint8),
             "A1": np.asarray(a1, dtype=np.uint8),
             "A2": np.asarray(a2, dtype=np.uint8),
             "A3": np.asarray(a3, dtype=np.uint8),
@@ -274,6 +278,39 @@ class MaslovRoettelerNF:
 
         lc1, lp1, lc2, lp2 = lemma10(leftpc)
         rc1, rp1, rc2, rp2 = lemma10(rightpc)
+        assert_in_cn_form(lc1)
+        assert_in_cn_form(lc2)
+        assert_in_cn_form(rc1)
+        assert_in_cn_form(rc2)
+
+        left_layer = GF2(lc1) @ GF2(lp1) @ GF2(lc2) @ GF2(lp2)
+        right_layer = GF2(rc1) @ GF2(rp1) @ GF2(rc2) @ GF2(rp2)
+
+        # Step 2/3 consistency: M3 = left_layer @ M1 @ right_layer.
+        m1_from_m3 = (
+            np.linalg.inv(left_layer) @ GF2(m3) @ np.linalg.inv(right_layer)
+        )
+        if not np.array_equal(
+            np.asarray(m1_from_m3, dtype=np.uint8), np.asarray(step1["M1"], dtype=np.uint8)
+        ):
+            raise ValueError("Theorem13 check failed: cannot recover M1 from M3 and Lemma10 layers.")
+
+        # Full reconstruction of the original symplectic matrix.
+        m_reconstructed = (
+            np.linalg.inv(GF2(step1["left_l"]))
+            @ np.linalg.inv(GF2(step1["left_sigma"]))
+            @ m1_from_m3
+            @ np.linalg.inv(GF2(step1["right_tau"]))
+            @ np.linalg.inv(GF2(step1["right_u"]))
+        )
+        if not np.array_equal(
+            np.asarray(m_reconstructed, dtype=np.uint8),
+            np.asarray(self.symplectic_matrix, dtype=np.uint8),
+        ):
+            raise ValueError(
+                "Theorem13 check failed: reconstructed matrix does not match original symplectic matrix."
+            )
+        print(lc1)
 
     def theorem13_step2(self, step1_result):
         n = self.n
@@ -507,6 +544,37 @@ def lemma10(
         )
 
     return c1, p1, c2, p2
+
+
+def assert_in_cn_form(c_in: NDArray[np.uint8]) -> None:
+    c = GF2(c_in)
+    if c.ndim != 2 or c.shape[0] != c.shape[1] or c.shape[0] % 2 != 0:
+        raise ValueError("C-matrix check failed: input must be 2n x 2n.")
+
+    n2 = c.shape[0]
+    n = n2 // 2
+
+    a = c[:n, :n]
+    z12 = c[:n, n:]
+    z21 = c[n:, :n]
+    d = c[n:, n:]
+
+    if np.any(np.asarray(z12, dtype=np.uint8)):
+        raise ValueError("C-matrix check failed: top-right block is not zero.")
+    if np.any(np.asarray(z21, dtype=np.uint8)):
+        raise ValueError("C-matrix check failed: bottom-left block is not zero.")
+
+    a_inv_t = np.linalg.inv(a).T
+    if not np.array_equal(np.asarray(d, dtype=np.uint8), np.asarray(a_inv_t, dtype=np.uint8)):
+        raise ValueError("C-matrix check failed: D != (A^{-1})^T.")
+
+    a_np = np.asarray(a, dtype=np.uint8)
+    if not np.all(a_np[np.tril_indices(n, k=-1)] == 0):
+        raise ValueError("C-matrix check failed: A is not upper triangular.")
+
+    d_np = np.asarray(d, dtype=np.uint8)
+    if not np.all(d_np[np.triu_indices(n, k=1)] == 0):
+        raise ValueError("C-matrix check failed: D is not lower triangular.")
 
 
 def lpu_rect_symplectic(
