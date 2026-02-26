@@ -13,7 +13,37 @@ TEST_N = 8
 # TEST_I = 3
 # Full-rank C example:
 TEST_I = 174533521197412727885233567186830402475
+HIGH_QUBIT_START = TEST_N - 3
+USE_QISKIT_RANDOM_TEST = True
+QISKIT_RANDOM_N = 18
+QISKIT_RANDOM_NUM_CNOTS = 100
+QISKIT_RANDOM_SEED = 7
+QISKIT_RANDOM_HIGH_QUBIT_START = QISKIT_RANDOM_N - 3
 GF2 = galois.GF(2)
+
+
+def print_cn_like_paper(c: NDArray[np.uint8]) -> None:
+    c = GF2(c)
+    n2 = c.shape[0]
+    assert n2 % 2 == 0
+    n = n2 // 2
+
+    U = c[:n, :n]
+    Z12 = c[:n, n:]
+    Z21 = c[n:, :n]
+    D = c[n:, n:]
+
+    assert np.all(np.asarray(Z12, dtype=np.uint8) == 0)
+    assert np.all(np.asarray(Z21, dtype=np.uint8) == 0)
+    assert np.array_equal(
+        np.asarray(D, dtype=np.uint8),
+        np.asarray(np.linalg.inv(U.T), dtype=np.uint8),
+    )
+
+    print("U =")
+    print(np.asarray(U, dtype=np.uint8))
+    print("(U^T)^-1 =")
+    print(np.asarray(D, dtype=np.uint8))
 
 
 class MaslovRoettelerNF:
@@ -214,6 +244,29 @@ class MaslovRoettelerNF:
                 f"Inconsistent k: lemma12 returned {k}, but M1 implies {k_from_m1}."
             )
 
+        # Canonicalize support positions so the lower-left block has the
+        # Theorem 13 layout with first k rows/cols as the active support.
+        c_arr = np.asarray(c_lower_left, dtype=np.uint8)
+        nz_rows = [i for i in range(n) if np.any(c_arr[i, :])]
+        nz_cols = [j for j in range(n) if np.any(c_arr[:, j])]
+        if len(nz_rows) != k or len(nz_cols) != k:
+            raise ValueError(
+                f"Unexpected support in lower-left block: rows={len(nz_rows)}, cols={len(nz_cols)}, k={k}."
+            )
+        z_rows = [i for i in range(n) if i not in nz_rows]
+        z_cols = [j for j in range(n) if j not in nz_cols]
+        row_order = nz_rows + z_rows
+        col_order = nz_cols + z_cols
+
+        prow = GF2(np.eye(n, dtype=np.uint8)[row_order, :])
+        pcol = GF2(np.eye(n, dtype=np.uint8)[:, col_order])
+        left_perm = GF2(np.block([[prow, z], [z, prow]]))
+        right_perm = GF2(np.block([[pcol, z], [z, pcol]]))
+
+        m1 = left_perm @ m1 @ right_perm
+        left_sigma = left_perm @ left_sigma
+        right_tau = right_tau @ right_perm
+
         r0 = slice(0, k)
         r1 = slice(k, n)
         r2 = slice(n, n + k)
@@ -287,13 +340,14 @@ class MaslovRoettelerNF:
         right_layer = GF2(rc1) @ GF2(rp1) @ GF2(rc2) @ GF2(rp2)
 
         # Step 2/3 consistency: M3 = left_layer @ M1 @ right_layer.
-        m1_from_m3 = (
-            np.linalg.inv(left_layer) @ GF2(m3) @ np.linalg.inv(right_layer)
-        )
+        m1_from_m3 = np.linalg.inv(left_layer) @ GF2(m3) @ np.linalg.inv(right_layer)
         if not np.array_equal(
-            np.asarray(m1_from_m3, dtype=np.uint8), np.asarray(step1["M1"], dtype=np.uint8)
+            np.asarray(m1_from_m3, dtype=np.uint8),
+            np.asarray(step1["M1"], dtype=np.uint8),
         ):
-            raise ValueError("Theorem13 check failed: cannot recover M1 from M3 and Lemma10 layers.")
+            raise ValueError(
+                "Theorem13 check failed: cannot recover M1 from M3 and Lemma10 layers."
+            )
 
         # Full reconstruction of the original symplectic matrix.
         m_reconstructed = (
@@ -310,7 +364,9 @@ class MaslovRoettelerNF:
             raise ValueError(
                 "Theorem13 check failed: reconstructed matrix does not match original symplectic matrix."
             )
-        print(lc1)
+
+        # print_matrix_like_paper(lc1, [self.n, self.n], [self.n, self.n], name="lc1")
+        # print_matrix_like_paper(lp1, [self.n, self.n], [self.n, self.n], name="lp1")
 
     def theorem13_step2(self, step1_result):
         n = self.n
@@ -434,6 +490,51 @@ def identity(n: int):
     return GF2(np.eye(n, dtype=np.uint8))
 
 
+def print_matrix_like_paper(
+    matrix: NDArray[np.uint8],
+    row_block_sizes: list[int] | None = None,
+    col_block_sizes: list[int] | None = None,
+    name: str = "M",
+) -> None:
+    """
+    Print a binary matrix in block form similar to paper notation.
+
+    Example:
+      print_matrix_like_paper(M, [n, n], [n, n], name="M")
+    """
+    arr = np.asarray(matrix, dtype=np.uint8)
+    if arr.ndim != 2:
+        raise ValueError("Input must be a 2D matrix.")
+
+    n_rows, n_cols = arr.shape
+    if row_block_sizes is None:
+        row_block_sizes = [n_rows]
+    if col_block_sizes is None:
+        col_block_sizes = [n_cols]
+
+    if sum(row_block_sizes) != n_rows:
+        raise ValueError("Sum of row_block_sizes must equal the number of rows.")
+    if sum(col_block_sizes) != n_cols:
+        raise ValueError("Sum of col_block_sizes must equal the number of columns.")
+
+    row_cuts = np.cumsum(row_block_sizes)[:-1].tolist()
+    col_cuts = np.cumsum(col_block_sizes)[:-1].tolist()
+
+    print(f"{name}:")
+    sep_width = 2 + (2 * n_cols - 1) + (3 * len(col_cuts))
+    for i in range(n_rows):
+        if i in row_cuts:
+            print("-" * sep_width)
+
+        blocks = []
+        start = 0
+        for cut in col_cuts + [n_cols]:
+            block_vals = arr[i, start:cut]
+            blocks.append(" ".join(str(int(v)) for v in block_vals))
+            start = cut
+        print("[ " + " | ".join(blocks) + " ]")
+
+
 def swap_rows(a, i: int, k: int) -> None:
     a[[i, k], :] = a[[k, i], :]
 
@@ -487,6 +588,133 @@ def _lemma7_lower(
     return np.asarray(l, dtype=np.uint8), np.asarray(lam, dtype=np.uint8)
 
 
+def optimize_for_pushing_cnot_target_to_lower(
+    u_in: NDArray[np.uint8],
+    m: int,
+) -> NDArray[np.uint8]:
+    """
+    Placeholder optimization pass for CNOT synthesis ordering.
+    Currently returns U unchanged.
+    """
+    print_matrix_like_paper(u_in, name="U")
+    u = np.asarray(u_in, dtype=np.uint8)
+    if u.ndim != 2 or u.shape[0] != u.shape[1]:
+        raise ValueError("U must be square.")
+    n = u.shape[0]
+    if m < 0 or m > n:
+        raise ValueError(f"m must be in [0, {n}], got {m}.")
+    if m % 2 != 0:
+        raise ValueError(f"m must be even to keep |J| even, got {m}.")
+    high_qubit_start = HIGH_QUBIT_START
+    if high_qubit_start < 0 or high_qubit_start > n:
+        raise ValueError(
+            f"HIGH_QUBIT_START must be in [0, {n}], got {high_qubit_start}."
+        )
+
+    # Bookkeeping state for greedy construction of J.
+    j_set: set[int] = set()
+    high_rows = list(range(high_qubit_start, n))
+    k_r = {r: 0 for r in high_rows}
+    v_r = {r: 0 for r in high_rows}
+
+    bad_ones = count_bad_ones_for_high_rows(u, high_qubit_start)
+    print(
+        f"[optimize_for_pushing_cnot_target_to_lower] "
+        f"high_qubit_start={high_qubit_start}, bad_ones={bad_ones}"
+    )
+
+    # Greedy construction of J up to size bound m.
+    while len(j_set) < m:
+        candidate_increase = {}
+        for j in range(n):
+            if j in j_set:
+                continue
+            candidate_increase[j] = increase_bad_ones(u, j, j_set, k_r, v_r, high_rows)
+
+        if len(candidate_increase) == 0:
+            break
+
+        best_j, best_increase = min(candidate_increase.items(), key=lambda x: x[1])
+        if best_increase >= 0 and (len(j_set) % 2 == 0):
+            break
+
+        j_set.add(best_j)
+        for r in high_rows:
+            u_rj = int(u[r, best_j] & 1)
+            k_r[r] += u_rj
+            v_r[r] ^= u_rj
+
+    if len(j_set) == 0:
+        print("no optimize")
+        return u
+
+    if len(j_set) % 2 != 0:
+        raise ValueError(
+            "Constructed |J| is odd; cannot form T = I + uu^T with TT^T=I."
+        )
+
+    u_selector = GF2.Zeros((n, 1))
+    for j in j_set:
+        u_selector[j, 0] = 1
+
+    t = identity(n) + (u_selector @ u_selector.T)
+    s = GF2(u) @ t
+    s_np = np.asarray(s, dtype=np.uint8)
+
+    print_matrix_like_paper(s_np, name="S")
+    return s_np
+
+
+def increase_bad_ones(
+    u_in: NDArray[np.uint8],
+    j: int,
+    j_set: set[int],
+    k_r: dict[int, int],
+    v_r: dict[int, int],
+    high_rows: list[int],
+) -> int:
+    """
+    Compute increase of bad_ones if column j is added to current J.
+    """
+    u = np.asarray(u_in, dtype=np.uint8)
+    if u.ndim != 2 or u.shape[0] != u.shape[1]:
+        raise ValueError("U must be square.")
+    n = u.shape[0]
+    if j < 0 or j >= n:
+        raise ValueError(f"j must be in [0, {n-1}], got {j}.")
+    if j in j_set:
+        raise ValueError(f"j={j} is already in J.")
+
+    new_j_size = len(j_set) + 1
+    increase = 0
+    for r in high_rows:
+        u_rj = int(u[r, j] & 1)
+        new_k_r = k_r[r] + u_rj
+        new_v_r = v_r[r] ^ u_rj
+        if new_v_r == 1:
+            increase += new_j_size - new_k_r
+    return increase
+
+
+def count_bad_ones_for_high_rows(u_in: NDArray[np.uint8], high_qubit_start: int) -> int:
+    """
+    Count bad ones for a general matrix using high-row cost:
+      bad_ones = (# of ones on high rows) - (# of high rows).
+    """
+    u = np.asarray(u_in, dtype=np.uint8)
+    if u.ndim != 2 or u.shape[0] != u.shape[1]:
+        raise ValueError("U must be square.")
+    n = u.shape[0]
+    if high_qubit_start < 0 or high_qubit_start > n:
+        raise ValueError(
+            f"high_qubit_start must be in [0, {n}], got {high_qubit_start}."
+        )
+
+    high_row_ones = int(np.sum(u[high_qubit_start:, :] & 1))
+    num_high_rows = n - high_qubit_start
+    return high_row_ones - num_high_rows
+
+
 def lemma10(
     a_in: NDArray[np.uint8],
 ) -> tuple[NDArray[np.uint8], NDArray[np.uint8]]:
@@ -504,14 +732,19 @@ def lemma10(
 
     n = a.shape[0]
     p = GF2(np.eye(n, dtype=np.uint8)[::-1])  # reversal permutation
-    a_rev = p @ a @ p
+    a_rev = p @ a @ p.T
 
     l_rev, lam_rev = _lemma7_lower(np.asarray(a_rev, dtype=np.uint8))
     l_rev = GF2(l_rev)
     lam_rev = GF2(lam_rev)
 
-    u = p @ l_rev @ p
-    lam = p @ lam_rev @ p
+    u = p @ l_rev @ p.T
+    u = GF2(
+        optimize_for_pushing_cnot_target_to_lower(np.asarray(u, dtype=np.uint8), m=4)
+    )
+    lam = p @ lam_rev @ p.T
+
+    # print_matrix_like_paper(u, name="U")
 
     u_np = np.asarray(u, dtype=np.uint8)
     if not np.all(u_np[np.tril_indices(n, k=-1)] == 0):
@@ -565,7 +798,9 @@ def assert_in_cn_form(c_in: NDArray[np.uint8]) -> None:
         raise ValueError("C-matrix check failed: bottom-left block is not zero.")
 
     a_inv_t = np.linalg.inv(a).T
-    if not np.array_equal(np.asarray(d, dtype=np.uint8), np.asarray(a_inv_t, dtype=np.uint8)):
+    if not np.array_equal(
+        np.asarray(d, dtype=np.uint8), np.asarray(a_inv_t, dtype=np.uint8)
+    ):
         raise ValueError("C-matrix check failed: D != (A^{-1})^T.")
 
     a_np = np.asarray(a, dtype=np.uint8)
@@ -785,9 +1020,60 @@ def fixed_symplectic_matrix() -> NDArray[np.uint8]:
     return np.asarray(s, dtype=np.uint8)
 
 
-S = fixed_symplectic_matrix()
+def random_symplectic_matrix_from_qiskit_cnot(
+    n: int,
+    num_cnots: int,
+    high_qubit_start: int,
+    seed: int | None = None,
+) -> NDArray[np.uint8]:
+    """
+    Build a random CNOT-only Clifford circuit in Qiskit and return its
+    2n x 2n symplectic matrix over GF(2).
+
+    Targets are restricted to qubits in [high_qubit_start, n-1].
+    """
+    if n <= 0:
+        raise ValueError("n must be positive.")
+    if num_cnots < 0:
+        raise ValueError("num_cnots must be non-negative.")
+    if high_qubit_start < 0 or high_qubit_start >= n:
+        raise ValueError(
+            f"high_qubit_start must be in [0, {n-1}], got {high_qubit_start}."
+        )
+
+    try:
+        from qiskit import QuantumCircuit
+        from qiskit.quantum_info import Clifford
+    except ImportError as exc:
+        raise ImportError(
+            "Qiskit is required for random_symplectic_matrix_from_qiskit_cnot."
+        ) from exc
+
+    rng = np.random.default_rng(seed)
+    qc = QuantumCircuit(n)
+    for _ in range(num_cnots):
+        target = int(rng.integers(high_qubit_start, n))
+        control = int(rng.integers(0, n - 1))
+        if control >= target:
+            control += 1
+        qc.cx(control, target)
+
+    s = np.asarray(Clifford(qc).symplectic_matrix, dtype=np.uint8)
+    if not check_symplectic(s, convention="standard"):
+        raise ValueError("Qiskit-derived symplectic matrix failed check_symplectic.")
+    return s
 
 
 if __name__ == "__main__":
+    if USE_QISKIT_RANDOM_TEST:
+        S = random_symplectic_matrix_from_qiskit_cnot(
+            n=QISKIT_RANDOM_N,
+            num_cnots=QISKIT_RANDOM_NUM_CNOTS,
+            high_qubit_start=QISKIT_RANDOM_HIGH_QUBIT_START,
+            seed=QISKIT_RANDOM_SEED,
+        )
+        print_matrix_like_paper(S, name="S")
+    else:
+        S = fixed_symplectic_matrix()
     assert check_symplectic(S, convention="standard")
     MaslovRoettelerNF(S).theorem13()
