@@ -47,6 +47,8 @@ elseif (("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang") OR (${CMAKE_CXX_COMPILER_I
 	if(${COVERAGE})
 		message(FATAL_ERROR "Coverage is not supported for clang. Do not set COVERAGE=Yes on this environment.")
 	endif()
+elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Fujitsu")
+	set(DEFAULT_OPT_FLAGS "-Kfast")
 else()
 	message(FATAL_ERROR "Unsupported Compiler.")
 endif()
@@ -157,21 +159,10 @@ endif()
 message(STATUS "Boost found at ${Boost_INCLUDE_DIRS}")
 
 # Eigen
-set(EIGEN_BUILD_DIR   ${PROJECT_BINARY_DIR}/eigen)
-set(EIGEN_INSTALL_DIR ${PROJECT_SOURCE_DIR}/include)
-set(EIGEN_INCLUDE_DIR ${EIGEN_INSTALL_DIR})
-ExternalProject_Add(
-    eigen
-    URL https://gitlab.com/libeigen/eigen/-/archive/3.3.7/eigen-3.3.7.tar.gz
-    PREFIX ${EIGEN_BUILD_DIR}
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
-    INSTALL_COMMAND
-      ${CMAKE_COMMAND} -E copy_directory ${EIGEN_BUILD_DIR}/src/eigen/Eigen ${EIGEN_INCLUDE_DIR}/Eigen
-      && ${CMAKE_COMMAND} -E copy_directory ${EIGEN_BUILD_DIR}/src/eigen/unsupported ${EIGEN_INCLUDE_DIR}/unsupported
-    TEST_COMMAND ""
-)
-include_directories(SYSTEM ${EIGEN_INCLUDE_DIR})
+find_package(Eigen3 REQUIRED)
+message(STATUS "Eigen3 found at ${EIGEN3_INCLUDE_DIR}")
+include_directories(SYSTEM ${EIGEN3_INCLUDE_DIR})
+add_custom_target(eigen)  # dummy target: subdirs call add_dependencies(... eigen)
 
 # Google test
 if(USE_TEST)
@@ -273,7 +264,7 @@ else()
 endif()
 
 ##### set flags #####
-if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "AppleClang"))
+if ((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "AppleClang") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Fujitsu"))
 	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 	# Set C++ standard
